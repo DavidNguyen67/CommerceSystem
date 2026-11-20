@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 
+         http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.commerce</groupId>
+    <artifactId>commerce-system</artifactId>
+    <version>0.0.1</version>
+    <packaging>pom</packaging>
+    <name>CommerceFlow System (Parent)</name>
+    <description>Enterprise Distributed E-Commerce Marketplace - Multi-module Spring Boot Project</description>
+
+    <modules>
+        <module>common-core</module>
+        <module>common-model</module>
+        <module>api-service</module>
+        <module>saga-orchestrator</module>
+        <module>event-consumer</module>
+        <module>job-service</module>
+    </modules>
+
+    <properties>
+        <java.version>21</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+    </properties>
+</project>
