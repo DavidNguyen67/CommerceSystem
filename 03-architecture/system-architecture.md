@@ -191,3 +191,7 @@ Hệ thống phân tách rành mạch hai phương thức giao tiếp:
 1. **Schema Autonomy**: Mỗi microservice sở hữu một PostgreSQL Database hoặc Schema riêng biệt với User/Password phân quyền độc lập. Dịch vụ $A$ không được cấp quyền truy cập vào tables của dịch vụ $B$.
 2. **Entity Duplication for Performance**: Khi một dịch vụ cần thông tin từ dịch vụ khác (ví dụ: Order Service cần tên sản phẩm, hình ảnh và giá niêm yết tại thời điểm mua), Order Service sẽ lưu snapshot các trường dữ liệu này trực tiếp vào bảng `order_items` thay vì truy vấn chéo sang Product Service mỗi khi đọc đơn hàng.
 3. **Eventual Consistency Projections**: Dữ liệu đọc phục vụ tìm kiếm hoặc báo cáo tổng hợp được đồng bộ hóa bất đồng bộ thông qua việc tiêu thụ Kafka Domain Events.
+4. **Centralized Table Definitions & Migrations (`common-model`)**: Nhằm đảm bảo kiểm soát tập trung toàn bộ schema, chống tình trạng lệch định nghĩa dữ liệu (Schema Drift) giữa các microservice:
+   - Toàn bộ các bảng dữ liệu (JPA `@Entity`) đại diện cho các Bounded Contexts được định nghĩa tập trung tại module `common-model` (`com.commerce.common_model.entity.*`).
+   - Toàn bộ các kịch bản tiến hóa cơ sở dữ liệu (Flyway Migrations `V1` - `V10`) được lưu trữ tại `common-model/src/main/resources/db/migration/` và thực thi tập trung qua `mvn flyway:migrate -pl common-model` hoặc `DatabaseMigrationRunner`.
+   - Các ứng dụng microservice (`api-service`, `event-consumer`, `saga-orchestrator`...) tái sử dụng trực tiếp các Entity này, giúp code nhất quán và loại bỏ hoàn toàn việc định nghĩa trùng lặp mô hình bảng.

@@ -20,7 +20,7 @@
 ```
 CommerceSystem/
 ├── common-core/              # [Library] Thư viện tiện ích dùng chung (Utils, Parse, Format, Exceptions)
-├── common-model/             # [Library] Models, DTOs, Event Contracts, Commands, Enums dùng chung
+├── common-model/             # [Library] Định nghĩa Table Entities (JPA ORM), Flyway Migrations, DTOs, Event Contracts & Enums
 ├── gateway-service/          # [Edge Gateway] Spring Cloud Gateway, Redis Token Bucket Rate Limiting & Routing
 ├── api-service/              # [Application] REST API Core Service (Checkout, Catalog, Order queries, Webhook)
 ├── saga-orchestrator/        # [Application] Bộ não điều phối Saga State Machine & Transaction Rollback
@@ -89,15 +89,37 @@ graph TD
 
 ---
 
-### 2.2. `common-model` (Thư viện Model & Contract)
+### 2.2. `common-model` (Thư viện Table Entities, Database Migration & Contract dùng chung)
 * **Loại artifact**: Standard Java JAR (Library).
-* **Trách nhiệm**:
+* **Trách nhiệm cốt lõi**:
+  - **Định nghĩa Table / JPA Entities tập trung**: Là nguồn chân lý duy nhất (Single Source of Truth) định nghĩa toàn bộ Entity ORM (`@Entity`) đại diện cho các bảng dữ liệu của tất cả 10 Bounded Contexts trong hệ thống:
+    - *Identity & Customer*: `User`, `CustomerProfile`, `CustomerAddress`.
+    - *Seller & Shop*: `Shop`, `SellerAddress`, `ShopCategory`.
+    - *Product Catalog*: `Category`, `Brand`, `Product`, `ProductImage`, `ProductOption`, `ProductOptionValue`, `ProductSku`, `SkuOptionCombination`.
+    - *Inventory*: `Inventory`, `InventoryReservation`, `InventoryAuditLog`.
+    - *Order*: `ParentOrder`, `SubOrder`, `OrderItem`.
+    - *Saga Orchestrator*: `SagaInstance`, `SagaStepExecution`.
+    - *Payment & Escrow*: `PaymentTransaction`, `EscrowLedger`, `PaymentRefund`.
+    - *Promotion*: `Campaign`, `FlashSale`, `FlashSaleItem`, `Voucher`, `VoucherCondition`, `VoucherRedemption`.
+    - *Shipping*: `ShippingCarrier`, `Shipment`, `ShipmentTrackingEvent`.
+    - *Review*: `ProductReview`, `ReviewMedia`, `ReviewReply`.
+    - *Base Class*: `BaseEntity` (chuẩn hóa kiểm toán `created_at`, `updated_at`, auditing listeners).
+  - **Quản lý & Thực thi Database Migration (Flyway)**:
+    - Quản lý tập trung toàn bộ các bản DDL Migration từ `V1` đến `V10` tại thư mục `src/main/resources/db/migration/`.
+    - Tích hợp `flyway-maven-plugin` hỗ trợ chạy migration trực tiếp từ Maven: `mvn flyway:migrate -pl common-model`.
+    - Cung cấp tiện ích Java `DatabaseMigrationRunner` phục vụ chạy migration độc lập hoặc tích hợp trong CI/CD pipeline.
+    - Đảm bảo tính nhất quán tuyệt đối của cấu trúc cơ sở dữ liệu, ngăn chặn tình trạng phân mảnh hoặc lệch schema (Schema Drift) giữa các microservices.
   - **DTOs & Response**: `ApiResponse<T>` (phong bì API chuẩn), `PageResponse<T>` (phân trang).
   - **Kafka Event Envelope**: `EventEnvelope<T>` tuân thủ CloudEvents (`eventId`, `eventType`, `correlationId`, `causationId`, `sourceService`, `timestamp`, `payload`).
   - **Saga Commands & Events**: Các hợp đồng giao tiếp giữa Orchestrator và các Worker (`OrderCheckoutInitiatedEvent`, `ReserveInventoryCommand`, `PaymentProcessedEvent`...).
-  - **Enums**: `OrderStatus`, `PaymentStatus`, `PaymentMethod`, `EventType`...
-* **Thư viện cần tích hợp**:
+  - **Enums toàn hệ thống**: `ParentOrderStatus`, `SubOrderStatus`, `PaymentTransactionStatus`, `PaymentMethod`, `SagaStatus`, `SagaType`, `ShipmentStatus`, `InventoryReservationStatus`, `ProductStatus`...
+* **Thư viện tích hợp**:
   - Phụ thuộc nội bộ: `common-core`
+  - `org.springframework.boot:spring-boot-starter-data-jpa`
+  - `org.postgresql:postgresql`
+  - `org.flywaydb:flyway-core`
+  - `org.flywaydb:flyway-database-postgresql`
+  - `org.flywaydb:flyway-maven-plugin`
   - `jakarta.validation:jakarta.validation-api`
   - `com.fasterxml.jackson.core:jackson-annotations`
   - `org.projectlombok:lombok`
@@ -252,7 +274,53 @@ Hệ thống tài liệu đầy đủ được tổ chức tại thư mục [`do
 
 ---
 
-## 5. Yêu cầu môi trường & Công nghệ sử dụng
+## 5. Quản lý Table Entity & Thực thi Database Migration (`common-model`)
+
+Module **`common-model`** đóng vai trò là nguồn chân lý duy nhất (Single Source of Truth) cho toàn bộ schema và ORM mapping của hệ thống CommerceFlow.
+
+### 5.1. Cấu trúc lưu trữ
+* **Table Entities**: Toàn bộ các thực thể JPA (`@Entity`) đại diện cho các bảng dữ liệu của 10 Bounded Contexts được định nghĩa tại `common-model/src/main/java/com/commerce/common_model/entity/`.
+* **Flyway Migration Scripts**: Toàn bộ các tệp DDL migration theo chuẩn versioning được lưu trữ tại `common-model/src/main/resources/db/migration/`:
+  - `V1__init_customer_identity_schema.sql`: Schema người dùng, hồ sơ khách hàng, địa chỉ, outbox/inbox.
+  - `V2__init_seller_shop_schema.sql`: Schema gian hàng, kho lấy/trả hàng, danh mục shop.
+  - `V3__init_product_catalog_schema.sql`: Cây danh mục, thương hiệu, SPU, SKU, ảnh, phân loại biến thể.
+  - `V4__init_inventory_schema.sql`: Tồn kho vật lý/khả dụng, phiên khóa kho, nhật ký kiểm toán.
+  - `V5__init_order_schema.sql`: Đơn hàng cha (Parent Order), đơn hàng con (Sub Order), chi tiết đơn hàng (Order Items).
+  - `V6__init_saga_orchestrator_schema.sql`: Phiên Saga phân tán, nhật ký từng bước thực thi (Step Executions).
+  - `V7__init_payment_schema.sql`: Giao dịch thanh toán cổng, tài khoản ký quỹ sàn (Escrow), hoàn tiền.
+  - `V8__init_promotion_schema.sql`: Chiến dịch, Flash Sale, Voucher sàn/shop, điều kiện áp dụng, hạn ngạch.
+  - `V9__init_shipping_schema.sql`: Đơn vị vận chuyển, vận đơn giao hàng, nhật ký hành trình.
+  - `V10__init_review_schema.sql`: Đánh giá 1-5 sao, hình ảnh/video feedback, phản hồi của gian hàng.
+
+### 5.2. Các cách thực thi Migration
+
+#### Cách 1: Sử dụng Flyway Maven Plugin (Khuyến nghị cho DevOps & CI/CD)
+```bash
+# Thực thi migrate toàn bộ bảng vào cơ sở dữ liệu
+mvn flyway:migrate -pl common-model
+
+# Kiểm tra trạng thái các phiên bản migration
+mvn flyway:info -pl common-model
+
+# Tùy biến thông tin kết nối qua tham số dòng lệnh hoặc biến môi trường
+mvn flyway:migrate -pl common-model \
+  -Dflyway.url=jdbc:postgresql://180.93.127.63:5432/commerce \
+  -Dflyway.user=quannvm \
+  -Dflyway.password=mWyrecUbkEbQGHDWhggGnJUXVS
+```
+
+#### Cách 2: Chạy Java Application Runner độc lập
+```bash
+# Chạy class DatabaseMigrationRunner trong common-model
+mvn compile exec:java -pl common-model -Dexec.mainClass="com.commerce.common_model.migration.DatabaseMigrationRunner"
+```
+
+#### Cách 3: Tự động chạy khi khởi động các Microservices
+Khi `api-service`, `event-consumer` hoặc `saga-orchestrator` khởi động với Flyway được kích hoạt (`spring.flyway.enabled=true`), Flyway sẽ tự động quét classpath `db/migration` từ dependency `common-model` và áp dụng các migration mới nhất.
+
+---
+
+## 6. Yêu cầu môi trường & Công nghệ sử dụng
 
 * **Java**: OpenJDK 21 LTS (hỗ trợ Virtual Threads / Project Loom)
 * **Build Tool**: Apache Maven 3.9+

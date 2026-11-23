@@ -26,6 +26,9 @@ Hệ thống nghiệp vụ lõi gồm 12 dịch vụ độc lập:
 12. `review-service`: Quản lý đánh giá 1-5 sao sau mua hàng, hình ảnh/video feedback, phản hồi của Shop và thưởng Shopee Xu.
 *(Notification Service hoạt động như một generic consumer đẩy Email, SMS và Push Notification)*.
 
+### 1.3. Tầng Dữ liệu & Quản lý Migration Tập trung (Shared Entity & Migration Tier)
+* `common-model`: Đóng vai trò là nguồn chân lý duy nhất (Single Source of Truth) định nghĩa toàn bộ Table Entities (`@Entity` JPA) cho cả 10 Bounded Contexts, đồng thời là trung tâm quản lý và thực thi Database Migration (Flyway `V1` đến `V10`). Các microservices trong hệ thống (`api-service`, `event-consumer`, `saga-orchestrator`...) tái sử dụng trực tiếp các Entity từ `com.commerce.common_model.entity.*`, giúp loại bỏ hoàn toàn sự phân mảnh cấu trúc bảng và ngăn ngừa lỗi Schema Drift.
+
 ---
 
 ## 2. ĐẶC TẢ CHI TIẾT TỪNG MICROSERVICE

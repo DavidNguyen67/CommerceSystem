@@ -746,3 +746,52 @@ CREATE TABLE <service_name>_inbox (
       FOR VALUES FROM ('2026-11-01 00:00:00+07') TO ('2026-12-01 00:00:00+07');
   ```
 * Cơ chế này giúp tối ưu quét chỉ mục (Index Pruning), giải phóng bảng lịch sử cũ và duy trì tốc độ đọc ghi ổn định ngay cả khi sàn tích lũy hàng chục triệu đơn hàng mỗi năm.
+
+---
+
+## 6. QUẢN LÝ ĐỊNH NGHĨA TABLE & MIGRATION TẬP TRUNG TẠI COMMON-MODEL
+
+Nhằm đảm bảo tính toàn vẹn schema, loại bỏ hoàn toàn hiện tượng lệch phiên bản bảng (Schema Drift) và giảm chi phí bảo trì code giữa các microservices, dự án áp dụng chiến lược **Centralized Table Definitions & Migrations** tại module `common-model`.
+
+### 6.1. Quy hoạch Table Entities (`com.commerce.common_model.entity`)
+
+Mọi bảng trong hệ thống đều được định nghĩa thành các thực thể JPA (`@Entity`) tại `common-model/src/main/java/com/commerce/common_model/entity/`:
+
+| STT | Bounded Context | Bảng DDL PostgreSQL | Thực thể Java (JPA Entity) | Class kế thừa / Ghi chú |
+|:---:|---|---|---|---|
+| 1 | Identity & Customer | `users`, `customer_profiles`, `customer_addresses` | `User`, `CustomerProfile`, `CustomerAddress` | Kế thừa `BaseEntity`, UUIDv7 PK |
+| 2 | Seller & Shop | `shops`, `seller_addresses`, `shop_categories` | `Shop`, `SellerAddress`, `ShopCategory` | Kế thừa `BaseEntity` |
+| 3 | Product Catalog | `categories`, `brands`, `products`, `product_images`, `product_options`, `product_option_values`, `product_skus`, `sku_option_combinations` | `Category`, `Brand`, `Product`, `ProductImage`, `ProductOption`, `ProductOptionValue`, `ProductSku`, `SkuOptionCombination` | Quan hệ phân cấp SPU-SKU |
+| 4 | Inventory | `inventories`, `inventory_reservations`, `inventory_audit_logs` | `Inventory`, `InventoryReservation`, `InventoryAuditLog` | `@Version` Optimistic Locking |
+| 5 | Order | `parent_orders`, `sub_orders`, `order_items` | `ParentOrder`, `SubOrder`, `OrderItem` | Idempotency Key, Cascading |
+| 6 | Saga Orchestrator | `saga_instances`, `saga_step_executions` | `SagaInstance`, `SagaStepExecution` | JSONB Payload, Step log |
+| 7 | Payment & Escrow | `payment_transactions`, `escrow_ledgers`, `payment_refunds` | `PaymentTransaction`, `EscrowLedger`, `PaymentRefund` | Ký quỹ và giao dịch |
+| 8 | Promotion | `campaigns`, `vouchers`, `voucher_conditions`, `voucher_redemptions`, `flash_sales`, `flash_sale_items` | `Campaign`, `Voucher`, `VoucherCondition`, `VoucherRedemption`, `FlashSale`, `FlashSaleItem` | Khung giờ Flash Sale, Voucher |
+| 9 | Shipping | `shipping_carriers`, `shipments`, `shipment_tracking_events` | `ShippingCarrier`, `Shipment`, `ShipmentTrackingEvent` | Snapshots địa chỉ, vận đơn |
+| 10 | Review | `product_reviews`, `review_media`, `review_replies` | `ProductReview`, `ReviewMedia`, `ReviewReply` | Đánh giá & phản hồi shop |
+
+### 6.2. Danh mục Migration Scripts (Flyway Versioned Scripts)
+
+Toàn bộ các tệp SQL migration được đặt tại thư mục `common-model/src/main/resources/db/migration/`:
+- `V1__init_customer_identity_schema.sql`
+- `V2__init_seller_shop_schema.sql`
+- `V3__init_product_catalog_schema.sql`
+- `V4__init_inventory_schema.sql`
+- `V5__init_order_schema.sql`
+- `V6__init_saga_orchestrator_schema.sql`
+- `V7__init_payment_schema.sql`
+- `V8__init_promotion_schema.sql`
+- `V9__init_shipping_schema.sql`
+- `V10__init_review_schema.sql`
+
+### 6.3. Quy trình thực thi Migration
+1. **Lệnh Maven CLI**:
+   ```bash
+   mvn flyway:migrate -pl common-model
+   ```
+2. **Java Migration Runner**:
+   ```bash
+   mvn compile exec:java -pl common-model -Dexec.mainClass="com.commerce.common_model.migration.DatabaseMigrationRunner"
+   ```
+3. **Các Microservices sử dụng**:
+   Các project `api-service`, `event-consumer`, `saga-orchestrator` khai báo dependency `common-model`, cấu hình `@EntityScan(basePackages = "com.commerce.common_model.entity")` và trực tiếp tiêm (inject) các Repository JPA thao tác với dữ liệu.

@@ -100,13 +100,14 @@ docs/
 
 ---
 
-### 5. ÁNH XẠ TRIỂN KHAI SOURCE CODE (6-PROJECT BUNDLE MAPPING)
+### 5. ÁNH XẠ TRIỂN KHAI SOURCE CODE (7-PROJECT BUNDLE MAPPING)
 
-Để hiện thực hóa 11 microservices trên trong quá trình phát triển mã nguồn mà vẫn tối ưu tài nguyên và dễ dàng quản lý, toàn bộ hệ thống được quy hoạch thành **6 project/module** (Tham khảo chi tiết tại [README.md](../../README.md)):
+Để hiện thực hóa 11 microservices trên trong quá trình phát triển mã nguồn mà vẫn tối ưu tài nguyên và dễ dàng quản lý, toàn bộ hệ thống được quy hoạch thành **7 project/module** (Tham khảo chi tiết tại [README.md](../../README.md)):
 
-1. **`common-core`** *(Java Library)*: Thư viện tiện ích dùng chung (`DateTimeUtils`, `JsonUtils`, `CurrencyUtils`, `StringUtils`, `BaseException`).
-2. **`common-model`** *(Java Library)*: Hợp đồng dữ liệu (`EventEnvelope<T>`, DTOs, Enums, Saga Commands & Events).
-3. **`api-service`** *(Spring Boot App)*: Điểm tiếp nhận HTTP từ Client (Order Checkout, Catalog, Cart, Webhook thanh toán).
-4. **`saga-orchestrator`** *(Spring Boot App)*: Bộ não điều phối giao dịch phân tán, quản lý Saga State Machine và bù trừ (Rollback) theo ADR-001.
-5. **`event-consumer`** *(Spring Boot App)*: Worker tiếp nhận sự kiện Kafka thực thi nghiệp vụ Kho (Inventory locks/commits), Vận đơn và Thông báo.
-6. **`job-service`** *(Spring Boot App)*: Worker chạy tác vụ nền & định kỳ (Order Expiration TTL hủy đơn tự động, Đối soát thanh toán, Giải ngân Escrow, Dọn dẹp Outbox/Inbox).
+1. **`common-core`** *(Java Library)*: Thư viện tiện ích dùng chung (`DateTimeUtils`, `JsonUtils`, `CurrencyUtils`, `StringUtils`, `BaseException`, `UuidV7Generator`).
+2. **`common-model`** *(Java Library)*: Nguồn chân lý duy nhất định nghĩa toàn bộ **Table Entities (`@Entity`)**, quản lý và thực thi **Database Migrations (Flyway `V1` - `V10`)**, cùng hợp đồng dữ liệu dùng chung (`EventEnvelope<T>`, DTOs, Enums, Saga Commands & Events).
+3. **`gateway-service`** *(Spring Cloud Gateway)*: Cửa ngõ bảo mật tiếp nhận toàn bộ HTTP traffic từ Client, thực thi Rate Limiting Token Bucket với Redis.
+4. **`api-service`** *(Spring Boot App)*: Điểm tiếp nhận HTTP từ Client (Order Checkout, Catalog, Cart, Webhook thanh toán).
+5. **`saga-orchestrator`** *(Spring Boot App)*: Bộ não điều phối giao dịch phân tán, quản lý Saga State Machine và bù trừ (Rollback) theo ADR-001.
+6. **`event-consumer`** *(Spring Boot App)*: Worker tiếp nhận sự kiện Kafka thực thi nghiệp vụ Kho (Inventory locks/commits), Vận đơn và Thông báo.
+7. **`job-service`** *(Spring Boot App)*: Worker chạy tác vụ nền & định kỳ (Order Expiration TTL hủy đơn tự động, Đối soát thanh toán, Giải ngân Escrow, Dọn dẹp Outbox/Inbox).
