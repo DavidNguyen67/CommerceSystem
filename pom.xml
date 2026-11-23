@@ -15,6 +15,7 @@
     <modules>
         <module>common-core</module>
         <module>common-model</module>
+        <module>gateway-service</module>
         <module>api-service</module>
         <module>saga-orchestrator</module>
         <module>event-consumer</module>

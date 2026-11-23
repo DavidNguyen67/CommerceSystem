@@ -69,3 +69,4 @@ common-model
 event-consumer
 job-service
 saga-orchestrator
+gateway-service

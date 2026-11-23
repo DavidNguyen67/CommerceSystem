@@ -1,0 +1,29 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres-db
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: commerce
+      POSTGRES_USER: quannvm
+      POSTGRES_PASSWORD: "mWyrecUbkEbQGHDWhggGnJUXVS"
+      TZ: Asia/Ho_Chi_Minh
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pgadmin-ui
+    restart: unless-stopped
+    ports:
+      - "5050:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: quannvm@vnpt.vn
+      PGADMIN_DEFAULT_PASSWORD: "vMTeXjHhPqsVgso"
+    depends_on:
+      - postgres
+
+volumes:
+  postgres_data:

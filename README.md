@@ -5,7 +5,7 @@
 ---
 
 ## 📑 Mục lục
-1. [Cấu trúc Bundle 6 Projects](#1-cấu-trúc-bundle-6-projects)
+1. [Cấu trúc Bundle 7 Projects](#1-cấu-trúc-bundle-7-projects)
 2. [Chi tiết thư viện & Phụ thuộc từng Project](#2-chi-tiết-thư-viện--phụ-thuộc-từng-project)
 3. [Mô hình Luồng điều phối Saga (Checkout Flow)](#3-mô-hình-luồng-điều-phối-saga-checkout-flow)
 4. [Bản đồ Kho tài liệu Kiến trúc (docs/)](#4-bản-đồ-kho-tài-liệu-kiến-trúc-docs)
@@ -13,15 +13,16 @@
 
 ---
 
-## 1. Cấu trúc Bundle 6 Projects
+## 1. Cấu trúc Bundle 7 Projects
 
-Để hiện thực hóa 11 microservices trong tài liệu đặc tả mà không gây cồng kềnh hạ tầng khi phát triển, hệ thống được module hóa thành **6 project/module** cốt lõi:
+Để hiện thực hóa 11 microservices trong tài liệu đặc tả mà không gây cồng kềnh hạ tầng khi phát triển, hệ thống được module hóa thành **7 project/module** cốt lõi:
 
 ```
 CommerceSystem/
 ├── common-core/              # [Library] Thư viện tiện ích dùng chung (Utils, Parse, Format, Exceptions)
 ├── common-model/             # [Library] Models, DTOs, Event Contracts, Commands, Enums dùng chung
-├── api-service/              # [Application] REST API Service (Checkout, Catalog, Order queries, Webhook)
+├── gateway-service/          # [Edge Gateway] Spring Cloud Gateway, Redis Token Bucket Rate Limiting & Routing
+├── api-service/              # [Application] REST API Core Service (Checkout, Catalog, Order queries, Webhook)
 ├── saga-orchestrator/        # [Application] Bộ não điều phối Saga State Machine & Transaction Rollback
 ├── event-consumer/           # [Application] Kafka Worker xử lý logic Inventory, Shipping & Notification
 ├── job-service/              # [Application] Background Jobs, Scheduled Tasks & Housekeeping Worker
@@ -33,13 +34,17 @@ CommerceSystem/
 
 ```mermaid
 graph TD
+    Client["Client (Web / Mobile)"] --> GW["gateway-service<br/>(Spring Cloud Gateway)"]
+    GW -->|Token Bucket Check| Redis[("Redis Rate Limiter")]
+    GW -->|Forward HTTP /api/**| API["api-service<br/>(Core REST API)"]
+
     subgraph SharedLibraries["Thư viện dùng chung"]
         Core["common-core<br/>(Java Library)"]
         Model["common-model<br/>(Java Library)"]
     end
 
     subgraph Applications["Spring Boot Applications"]
-        API["api-service<br/>(REST API)"]
+        API
         Saga["saga-orchestrator<br/>(Saga Engine)"]
         Consumer["event-consumer<br/>(Kafka Worker)"]
         Job["job-service<br/>(Scheduled Jobs)"]
@@ -99,11 +104,27 @@ graph TD
 
 ---
 
-### 2.3. `api-service` (Project REST API Service)
-* **Loại artifact**: Spring Boot Executable JAR (Cổng HTTP API).
+### 2.3. `gateway-service` (Edge API Gateway & Redis Rate Limiter)
+* **Loại artifact**: Spring Boot Executable JAR (Reactive WebFlux / Netty).
 * **Port mặc định**: `8080`
 * **Trách nhiệm**:
-  - Tiếp nhận HTTP Request từ Client / Mobile App.
+  - Cửa ngõ bảo mật duy nhất tiếp nhận HTTP Traffic từ Client (Web React, Mobile Flutter).
+  - Phân tán tải và định tuyến (Routing & Reverse Proxy) tới các dịch vụ phía sau (`api-service`).
+  - Chống bot, chống DDoS, bảo vệ tài nguyên qua **Redis Token Bucket Rate Limiting**.
+  - Rate limit linh hoạt theo **User ID** (cho đặt hàng, thanh toán) và theo **Client IP** (cho xem sản phẩm public).
+  - Xử lý CORS, Forward HTTP Headers (`X-Correlation-ID`, `X-User-Id`).
+* **Thư viện Spring Boot cần tích hợp**:
+  - `org.springframework.cloud:spring-cloud-starter-gateway`
+  - `org.springframework.boot:spring-boot-starter-data-redis-reactive`
+  - `org.projectlombok:lombok`
+
+---
+
+### 2.4. `api-service` (Project Core REST API Service)
+* **Loại artifact**: Spring Boot Executable JAR (Core Business API).
+* **Port mặc định**: `8081`
+* **Trách nhiệm**:
+  - Tiếp nhận HTTP Request từ API Gateway chuyển tiếp vào.
   - Endpoint đặt hàng `POST /api/v1/orders/checkout`.
   - Tra cứu thông tin đơn hàng, danh mục sản phẩm, giỏ hàng.
   - Tiếp nhận Webhook thanh toán từ cổng trung gian (`POST /api/v1/payments/webhook`).
@@ -112,13 +133,15 @@ graph TD
   - Phụ thuộc nội bộ: `common-core`, `common-model`
   - `org.springframework.boot:spring-boot-starter-web`
   - `org.springframework.boot:spring-boot-starter-validation`
+  - `org.springframework.boot:spring-boot-starter-data-jpa`
+  - `org.postgresql:postgresql`
   - `org.springframework.kafka:spring-kafka`
   - `org.springframework.boot:spring-boot-starter-actuator`
   - `org.projectlombok:lombok`
 
 ---
 
-### 2.4. `saga-orchestrator` (Bộ não điều phối Saga State Machine)
+### 2.5. `saga-orchestrator` (Bộ não điều phối Saga State Machine)
 * **Loại artifact**: Spring Boot Executable JAR (Saga Engine).
 * **Port mặc định**: `8082`
 * **Trách nhiệm**:
@@ -136,9 +159,9 @@ graph TD
 
 ---
 
-### 2.5. `event-consumer` (Project xử lý logic nhận Event Kafka)
+### 2.6. `event-consumer` (Project xử lý logic nhận Event Kafka)
 * **Loại artifact**: Spring Boot Executable JAR (Worker nền).
-* **Port mặc định**: `8081` (hoặc chạy Headless mode).
+* **Port mặc định**: `8083` (hoặc chạy Headless mode).
 * **Trách nhiệm**:
   - Lắng nghe Kafka Topic xử lý logic nghiệp vụ không đồng bộ:
     - **Inventory Consumer**: Thực thi khóa tạm (Reservation), trừ tồn kho vật lý (Commit), nhả kho khi hủy (Release) với cơ chế kiểm soát tương tranh (Conditional Updates).
@@ -154,7 +177,7 @@ graph TD
 
 ---
 
-### 2.6. `job-service` (Project Scheduled Background Jobs & Housekeeping)
+### 2.7. `job-service` (Project Scheduled Background Jobs & Housekeeping)
 * **Loại artifact**: Spring Boot Executable JAR (Batch / Cron Worker).
 * **Port mặc định**: `8083` (hoặc chạy Headless mode).
 * **Trách nhiệm**:

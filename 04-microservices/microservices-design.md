@@ -7,7 +7,11 @@
 
 ## 1. DANH SÁCH & BẢN ĐỒ DỊCH VỤ (MICROSERVICES ROSTER)
 
-Hệ thống được module hóa thành 12 dịch vụ nghiệp vụ độc lập:
+### 1.1. Tầng Edge & Gateway (Edge & Security Tier)
+* `gateway-service` (Spring Cloud Gateway): Cửa ngõ duy nhất đón nhận toàn bộ HTTP request từ Web/Mobile Client; thực thi **Redis Token Bucket Rate Limiting** (theo User ID và Client IP), kiểm tra bảo mật, xử lý CORS và phân phối định tuyến (Routing & Reverse Proxy) tới các microservice nội bộ.
+
+### 1.2. Tầng Core Microservices (Database per Service)
+Hệ thống nghiệp vụ lõi gồm 12 dịch vụ độc lập:
 1. `identity-service`: Quản lý xác thực, cấp phát JWT và phân quyền (RBAC: Customer, Seller, Admin).
 2. `customer-service`: Quản lý hồ sơ cá nhân khách hàng, sổ địa chỉ nhận hàng, phân hạng Loyalty.
 3. `seller-service`: Quản lý hồ sơ gian hàng, danh mục riêng của shop, thiết lập kho lấy hàng và kho trả hàng.
