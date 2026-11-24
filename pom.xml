@@ -13,13 +13,14 @@
     <description>Enterprise Distributed E-Commerce Marketplace - Multi-module Spring Boot Project</description>
 
     <modules>
-        <module>common-core</module>
-        <module>common-model</module>
-        <module>gateway-service</module>
-        <module>api-service</module>
-        <module>saga-orchestrator</module>
-        <module>event-consumer</module>
-        <module>job-service</module>
+        <module>projects/common-core</module>
+        <module>projects/common-model</module>
+        <module>projects/gateway-service</module>
+        <module>projects/identity-service</module>
+        <module>projects/api-service</module>
+        <module>projects/saga-orchestrator</module>
+        <module>projects/event-consumer</module>
+        <module>projects/job-service</module>
     </modules>
 
     <properties>
