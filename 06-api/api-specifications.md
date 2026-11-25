@@ -35,7 +35,128 @@
 
 ---
 
-## 2. PUBLIC & CATALOG APIS (TRƯNG BÀY & TÌM KIẾM SẢN PHẨM)
+## 2. IDENTITY & AUTHENTICATION APIS (identity-service)
+
+Toàn bộ các yêu cầu xác thực, cấp phát token và phân quyền được xử lý bởi `identity-service` (Port 8084) và định tuyến qua Gateway tại `/api/v1/auth/**`.
+
+### 2.1. Đăng ký tài khoản (Register)
+- **Method**: `POST`
+- **Path**: `/auth/register`
+- **Auth**: Public
+- **Request Body**:
+```json
+{
+  "phoneNumber": "0987654321",
+  "email": "customer@example.com",
+  "password": "SecurePassword123@",
+  "role": "CUSTOMER"
+}
+```
+- **Response 201 Created**:
+```json
+{
+  "code": 200,
+  "message": "Success",
+  "data": {
+    "id": "018d9f10-1234-7111-8000-abcdef123456",
+    "phoneNumber": "0987654321",
+    "email": "customer@example.com",
+    "role": "CUSTOMER",
+    "status": "ACTIVE"
+  },
+  "timestamp": "2026-11-24T15:00:00Z"
+}
+```
+
+### 2.2. Đăng nhập & Lấy JWT OIDC Tokens (Login)
+- **Method**: `POST`
+- **Path**: `/auth/login`
+- **Auth**: Public
+- **Request Body**:
+```json
+{
+  "username": "0987654321",
+  "password": "SecurePassword123@"
+}
+```
+- **Response 200 OK**:
+```json
+{
+  "code": 200,
+  "message": "Success",
+  "data": {
+    "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.ey...",
+    "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.ey...",
+    "token_type": "Bearer",
+    "expires_in": 3600,
+    "jti": "018d9f12-3456-789a-bcde-0123456789ab",
+    "user_id": "018d9f10-1234-7111-8000-abcdef123456",
+    "roles": [
+      "ROLE_CUSTOMER"
+    ]
+  },
+  "timestamp": "2026-11-24T15:00:00Z"
+}
+```
+> [!NOTE]
+> Payload của `access_token` tuân thủ chuẩn OIDC RFC 7519: `sub`, `iss`, `aud`, `exp`, `iat`, `jti`, `preferred_username`, `email`, `roles`, và `realm_access` (Keycloak format).
+
+### 2.3. Làm mới Token (Refresh Token)
+- **Method**: `POST`
+- **Path**: `/auth/refresh`
+- **Auth**: Public
+- **Request Body**:
+```json
+{
+  "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.ey..."
+}
+```
+- **Response 200 OK**: Trả về cặp `access_token` và `refresh_token` mới tương tự login.
+
+### 2.4. Đăng xuất & Thu hồi phiên (Logout)
+- **Method**: `POST`
+- **Path**: `/auth/logout`
+- **Auth**: Header `Authorization: Bearer <JWT_ACCESS_TOKEN>`
+- **Response 200 OK**:
+```json
+{
+  "code": 200,
+  "message": "Success",
+  "data": "Logged out successfully",
+  "timestamp": "2026-11-24T15:00:00Z"
+}
+```
+
+### 2.5. Tra cứu danh tính phiên hiện tại (Get Current User / Me)
+- **Method**: `GET`
+- **Path**: `/auth/me`
+- **Auth**: Header `Authorization: Bearer <JWT_ACCESS_TOKEN>`
+- **Response 200 OK**:
+```json
+{
+  "code": 200,
+  "message": "Success",
+  "data": {
+    "userId": "018d9f10-1234-7111-8000-abcdef123456",
+    "username": "0987654321",
+    "email": "customer@example.com",
+    "roles": [
+      "ROLE_CUSTOMER"
+    ]
+  },
+  "timestamp": "2026-11-24T15:00:00Z"
+}
+```
+
+### 2.6. Khóa công khai JWKS Endpoint (JWKS)
+- **Method**: `GET`
+- **Path**: `/.well-known/jwks.json` hoặc `/oauth2/jwks`
+- **Auth**: Public
+- **Response 200 OK**: Trả về danh sách JSON Web Keys (JWKS) cho API Gateway và các Resource Server thẩm định chữ ký token.
+
+---
+
+## 3. PUBLIC & CATALOG APIS (TRƯNG BÀY & TÌM KIẾM SẢN PHẨM)
 
 ### 2.1. Lấy Cây Danh mục Ngành hàng (Category Tree)
 - **Method**: `GET`

@@ -166,9 +166,27 @@ Hệ thống nghiệp vụ lõi gồm 12 dịch vụ độc lập:
 ---
 
 ### 2.12. Identity & Auth Service (`identity-service`)
-- **Trách nhiệm**: Xác thực tài khoản người dùng, cấp phát JWT Bearer Token, làm mới token (Refresh Token), phân quyền theo Role (`CUSTOMER`, `SELLER`, `ADMIN`).
-- **Dữ liệu sở hữu**: `users` table tại `commerceflow_customer_db`.
-- **APIs công khai**: `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`.
+- **Port**: `8084`
+- **Công nghệ lõi**: Spring Boot 4.2.x + Spring Security + JJWT 0.12.6 + BCrypt Password Encoder.
+- **Trách nhiệm**:
+  - Quản lý tài khoản, đăng ký, xác thực danh tính người dùng và cấp phát OIDC JWT Tokens.
+  - Cung cấp endpoint công khai JWKS (`/.well-known/jwks.json`, `/oauth2/jwks`) phục vụ API Gateway và các microservices xác minh chữ ký số của token.
+  - Quản lý vòng đời token (Access Token 1h, Refresh Token 7 ngày) và danh sách đen thu hồi (Revocation / Redis Blacklist qua claim `jti`).
+- **3 Nguyên tắc kiến trúc bảo mật cốt lõi**:
+  1. **JWT chuẩn OIDC claims**: Payload token chứa đầy đủ các claims tiêu chuẩn: `sub` (User UUID), `iss` (`https://auth.commerceflow.com`), `aud` (`commerce-api`), `exp`, `iat`, `jti`, `preferred_username`, `email`, `roles` (`ROLE_CUSTOMER`, `ROLE_SELLER`, `ROLE_ADMIN`), và `realm_access` (Keycloak format).
+  2. **Tách lớp AuthProvider & RoleClaimsAdapter Interface**: Không hard-code logic xác thực/token vào nghiệp vụ. Dịch vụ phân tách rõ:
+     - `AuthProvider`: Interface cho `authenticate()`, `refreshToken()`, `revokeToken()`, `validate()`. Triển khai mặc định: `DatabaseAuthProvider`.
+     - `TokenProvider`: Interface cho việc tạo, giải mã và thẩm định token (`JwtTokenProvider`).
+     - `RoleClaimsAdapter`: Interface trích xuất roles từ claims (`DefaultRoleClaimsAdapter`), cho phép đổi sang Keycloak/Okta/Auth0 chỉ bằng việc cấu hình lại Issuer/JWKS và adapter map role mà không phải sửa sâu luồng nghiệp vụ.
+  3. **Phân quyền dựa trên claims/roles (Stateless RBAC)**: Các microservices downstream giải mã token và nạp `UserPrincipal` vào `SecurityContextHolder`. Không thực hiện truy vấn DB bảng `users` trong mỗi request filter.
+- **Dữ liệu sở hữu**: `users` table (`id` UUIDv7, `phone_number`, `email`, `password_hash`, `role`, `status`) tại database `commerce_db` (schema `public`).
+- **APIs cung cấp**:
+  - `POST /api/v1/auth/register`: Đăng ký tài khoản mới (mặc định role `CUSTOMER` hoặc `SELLER`).
+  - `POST /api/v1/auth/login`: Xác thực thông tin đăng nhập, trả về Access Token + Refresh Token OIDC.
+  - `POST /api/v1/auth/refresh`: Cấp mới Access Token từ Refresh Token hợp lệ.
+  - `POST /api/v1/auth/logout`: Thu hồi token và đẩy JTI vào danh sách thu hồi.
+  - `GET /api/v1/auth/me`: Tra cứu thông tin danh tính từ JWT claims của phiên hiện tại.
+  - `GET /.well-known/jwks.json` & `/oauth2/jwks`: Cung cấp public key descriptor cho các dịch vụ downstream xác thực chữ ký token.
 
 ---
 
