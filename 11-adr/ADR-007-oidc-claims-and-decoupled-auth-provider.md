@@ -38,14 +38,14 @@ Tách biệt hoàn toàn tầng giao tiếp xác thực và sinh mã khỏi các
    - Khả năng hoán đổi: Khi chuyển sang Keycloak/Okta, chỉ cần tạo `KeycloakAuthProvider` thực hiện gọi token endpoint của IdP mà không chạm vào controller hay business logic.
 2. **`TokenProvider`**:
    - Khai báo hành vi: `generateTokens(principal)`, `parseAndValidateToken(token)`, `validateToken(token)`, `getClaims(token)`.
-   - Triển khai hiện tại: `JwtTokenProvider` (sử dụng JJWT 0.12.x).
+   - Triển khai hiện tại: `JwtTokenProvider` (sử dụng JJWT 0.12.x ký **RS256** và xuất Public Key chuẩn RFC 7517 qua `/.well-known/jwks.json`).
 3. **`RoleClaimsAdapter`**:
    - Khai báo: `extractRoles(claims)`.
    - Triển khai mặc định: `DefaultRoleClaimsAdapter` bóc tách linh hoạt từ cả claim `roles`, Keycloak `realm_access.roles`, và OAuth2 `scope`.
 
 ### Nguyên tắc 3: Phân quyền Stateless dựa trên Claims/Roles thay vì phụ thuộc DB Users
-- Downstream services và API Gateway thực hiện xác thực và phân quyền hoàn toàn **Stateless**:
-  - `JwtAuthenticationFilter` giải mã token, xác minh chữ ký thông qua khóa bí mật hoặc JWKS (`/.well-known/jwks.json`), đọc claims và bóc tách roles vào đối tượng `UserPrincipal`.
+- Downstream services (`api-service`) sử dụng chuẩn **`spring-boot-starter-oauth2-resource-server`** kết hợp `OidcJwtAuthenticationConverter` (tái sử dụng `RoleClaimsAdapter` từ `common-model`) để xác thực và phân quyền hoàn toàn **Stateless**, không cần duplicate `JwtAuthenticationFilter`:
+  - Tự động giải mã token và xác minh chữ ký RS256 thông qua JWKS (`/.well-known/jwks.json`), đọc claims và bóc tách roles vào đối tượng `UserPrincipal`.
   - Đưa `UserPrincipal` kèm `SimpleGrantedAuthority` vào `SecurityContextHolder`.
   - **Tuyệt đối không thực hiện truy vấn bảng `users`** trong quá trình lọc request. Toàn bộ logic `@PreAuthorize("hasRole('CUSTOMER')")` hoặc `principal.isSeller()` được xử lý trong bộ nhớ.
 

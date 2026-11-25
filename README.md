@@ -184,6 +184,7 @@ graph TD
 * **Port mặc định**: `8081`
 * **Trách nhiệm**:
   - Tiếp nhận HTTP Request từ API Gateway chuyển tiếp vào.
+  - Đóng vai trò **OAuth2 Resource Server** xác thực Bearer JWT (RS256 qua JWKS Endpoint) và phân quyền stateless từ `UserPrincipal` + `RoleClaimsAdapter` (không truy vấn DB `users`).
   - Endpoint đặt hàng `POST /api/v1/orders/checkout`.
   - Tra cứu thông tin đơn hàng, danh mục sản phẩm, giỏ hàng.
   - Tiếp nhận Webhook thanh toán từ cổng trung gian (`POST /api/v1/payments/webhook`).
@@ -191,6 +192,7 @@ graph TD
 * **Thư viện Spring Boot tích hợp**:
   - Phụ thuộc nội bộ: `common-core`, `common-model`
   - `org.springframework.boot:spring-boot-starter-web`
+  - `org.springframework.boot:spring-boot-starter-oauth2-resource-server`
   - `org.springframework.boot:spring-boot-starter-validation`
   - `org.springframework.boot:spring-boot-starter-data-jpa`
   - `org.postgresql:postgresql`
