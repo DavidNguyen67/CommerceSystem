@@ -1,8 +1,9 @@
+
 version: '3.8'
 
 services:
   redis:
-    image: redis:7-alpine
+    image: redis/redis-stack-server:latest
     container_name: redis-rate-limiter
     restart: always
     ports:
@@ -10,7 +11,6 @@ services:
     volumes:
       - redis_data:/data
       - ./redis.conf:/usr/local/etc/redis/redis.conf
-    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
     environment:
       - TZ=Asia/Ho_Chi_Minh
     healthcheck:
@@ -19,7 +19,6 @@ services:
       timeout: 3s
       retries: 5
 
-  # (Tuỳ chọn) Giao diện trực quan xem các key & TTL đang nhảy
   redis-insight:
     image: redis/redisinsight:latest
     container_name: redis-insight
