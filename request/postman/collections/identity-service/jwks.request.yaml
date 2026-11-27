@@ -1,4 +1,0 @@
-$kind: http-request
-url: http://localhost:8084/.well-known/jwks.json
-method: GET
-order: 6000

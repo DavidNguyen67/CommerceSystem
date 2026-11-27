@@ -154,6 +154,92 @@ Toàn bộ các yêu cầu xác thực, cấp phát token và phân quyền đư
 - **Auth**: Public
 - **Response 200 OK**: Trả về danh sách JSON Web Keys (JWKS) cho API Gateway và các Resource Server thẩm định chữ ký token.
 
+### 2.7. Gửi mã OTP xác thực Số điện thoại (Send Phone Verification OTP)
+- **Method**: `POST`
+- **Path**: `/auth/verify/phone/send`
+- **Auth**: Header `Authorization: Bearer <JWT_ACCESS_TOKEN>` (hoặc Public kèm `phoneNumber` khi kích hoạt sau đăng ký)
+- **Xử lý**: Tạo OTP 6 chữ số lưu Redis `auth:otp:PHONE:{phoneNumber}` (TTL 5 phút, giới hạn cooldown 60 giây tại `auth:otp:cooldown:PHONE:{phoneNumber}`), đồng thời ghi event `PHONE_VERIFICATION_REQUESTED` vào `customer_outbox` để `event-consumer` gửi SMS.
+- **Request Body**:
+```json
+{
+  "phoneNumber": "0987654321"
+}
+```
+- **Response 200 OK**:
+```json
+{
+  "code": 200,
+  "message": "Success",
+  "data": "Verification OTP sent to phone number",
+  "timestamp": "2026-11-27T11:20:00Z"
+}
+```
+
+### 2.8. Xác nhận mã OTP Số điện thoại (Confirm Phone Verification)
+- **Method**: `POST`
+- **Path**: `/auth/verify/phone/confirm`
+- **Auth**: Header `Authorization: Bearer <JWT_ACCESS_TOKEN>` (hoặc Public kèm `phoneNumber`)
+- **Xử lý**: Đối chiếu OTP trong Redis (tối đa 5 lần nhập sai trước khi vô hiệu hóa OTP), cập nhật `users.is_verified_phone_number = true` và xóa key OTP khỏi Redis.
+- **Request Body**:
+```json
+{
+  "phoneNumber": "0987654321",
+  "otp": "482910"
+}
+```
+- **Response 200 OK**:
+```json
+{
+  "code": 200,
+  "message": "Success",
+  "data": "Phone number verified successfully",
+  "timestamp": "2026-11-27T11:20:00Z"
+}
+```
+
+### 2.9. Gửi mã / liên kết xác thực Email (Send Email Verification)
+- **Method**: `POST`
+- **Path**: `/auth/verify/email/send`
+- **Auth**: Header `Authorization: Bearer <JWT_ACCESS_TOKEN>`
+- **Xử lý**: Tạo OTP/Token xác thực lưu Redis `auth:otp:EMAIL:{email}` (TTL 15 phút, cooldown 60 giây) và ghi event `EMAIL_VERIFICATION_REQUESTED` vào `customer_outbox` để `event-consumer` gửi email.
+- **Request Body**:
+```json
+{
+  "email": "customer@example.com"
+}
+```
+- **Response 200 OK**:
+```json
+{
+  "code": 200,
+  "message": "Success",
+  "data": "Verification email sent",
+  "timestamp": "2026-11-27T11:20:00Z"
+}
+```
+
+### 2.10. Xác nhận Email (Confirm Email Verification)
+- **Method**: `POST`
+- **Path**: `/auth/verify/email/confirm`
+- **Auth**: Header `Authorization: Bearer <JWT_ACCESS_TOKEN>` (hoặc Public nếu xác thực qua token link)
+- **Xử lý**: Kiểm tra OTP/token trong Redis, cập nhật `users.is_verified_email = true` và xóa key khỏi Redis.
+- **Request Body**:
+```json
+{
+  "email": "customer@example.com",
+  "otp": "739201"
+}
+```
+- **Response 200 OK**:
+```json
+{
+  "code": 200,
+  "message": "Success",
+  "data": "Email verified successfully",
+  "timestamp": "2026-11-27T11:20:00Z"
+}
+```
+
 ---
 
 ## 3. PUBLIC & CATALOG APIS (TRƯNG BÀY & TÌM KIẾM SẢN PHẨM)

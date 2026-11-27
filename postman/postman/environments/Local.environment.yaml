@@ -1,0 +1,14 @@
+name: Local
+values:
+  - key: baseUrl
+    value: 'http://localhost:8084'
+  - key: phone_number
+    value: 0900000000
+  - key: test_password
+    value: LocalDemo123!
+  - key: phone_otp
+    value: ''
+  - key: access_token
+    value: ''
+  - key: refresh_token
+    value: ''

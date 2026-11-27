@@ -1,0 +1,12 @@
+$kind: collection
+name: identity-service
+scripts:
+  - type: http:afterResponse
+    code: |-
+      if (['register', 'login', 'refresh'].includes(pm.info.requestName) && pm.response.code === 200) {
+        const { data } = pm.response.json();
+        if (data?.access_token && data?.refresh_token) {
+          pm.environment.set('access_token', data.access_token);
+          pm.environment.set('refresh_token', data.refresh_token);
+        }
+      }
