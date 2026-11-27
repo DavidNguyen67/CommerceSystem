@@ -33,7 +33,7 @@
 | Luồng nghiệp vụ | Bảng đọc (Read) | Bảng ghi / cập nhật (Write) | Service thực thi |
 |---|---|---|---|
 | **Đăng ký / Đăng nhập / Profile** | `users`, `customer_profiles` | `users`, `customer_profiles`, `customer_addresses`, `customer_outbox` | `identity-service`, `api-service` |
-| **Xác thực SĐT & Email (OTP)** | `users`, Redis (`auth:otp:*`) | `users` (`is_verified_*`), `customer_outbox`, Redis | `identity-service`, `event-consumer` |
+| **Xác thực SĐT & Email (OTP)** | `users`, Redis (OTP và cooldown) | `users` (`is_verified_*`), `customer_outbox`, Redis | `identity-service`, `event-consumer` |
 | **Mở Shop & Quản lý kho bán** | `users`, `shops` | `shops`, `seller_addresses`, `shop_categories`, `seller_outbox` | `api-service` |
 | **Đăng bán sản phẩm (SPU -> SKU)** | `categories`, `brands`, `shops` | `products`, `product_images`, `product_options`, `product_option_values`, `product_skus`, `sku_option_combinations`, `inventories`, `product_outbox` | `api-service`, `event-consumer` |
 | **Checkout & Tách đơn Multi-Vendor** | `customer_addresses`, `product_skus`, `vouchers`, `voucher_conditions`, `flash_sale_items` | `parent_orders`, `sub_orders`, `order_items`, `order_outbox`, `saga_instances`, `saga_step_executions` | `api-service`, `saga-orchestrator` |
@@ -49,7 +49,7 @@
 ## 2. V1 — CUSTOMER & IDENTITY (`V1__init_customer_identity_schema.sql`)
 
 ### Chức năng nghiệp vụ các bảng V1
-- **`users`**: Trung tâm xác thực & phân quyền (AuthN/AuthZ). Lưu thông tin đăng nhập (`phone_number`/`email`), mật khẩu băm (`password_hash`), vai trò (`CUSTOMER`/`SELLER`/`ADMIN`), trạng thái xác thực (`is_verified_phone_number`, `is_verified_email`) và trạng thái khóa tài khoản (`ACTIVE`/`LOCKED`/`SUSPENDED`). `identity-service` đọc/ghi bảng này khi login/register/verify OTP và phát JWT OIDC (gồm các claim xác thực); các service khác không query bảng này mà xác thực qua JWT claims. Luồng OTP xác thực SĐT/Email lưu mã tạm và rate-limit trong **Redis** (`auth:otp:*`, `auth:otp:cooldown:*`), đồng thời ghi event `PHONE_VERIFICATION_REQUESTED` / `EMAIL_VERIFICATION_REQUESTED` vào `customer_outbox` để `event-consumer` gửi SMS/Email.
+- **`users`**: Trung tâm xác thực & phân quyền (AuthN/AuthZ). Lưu thông tin đăng nhập (`phone_number`/`email`), mật khẩu băm (`password_hash`), vai trò (`CUSTOMER`/`SELLER`/`ADMIN`), trạng thái xác thực (`is_verified_phone_number`, `is_verified_email`) và trạng thái khóa tài khoản (`ACTIVE`/`LOCKED`/`SUSPENDED`). `identity-service` đọc và ghi bảng này khi đăng nhập, đăng ký hoặc xác thực OTP. Các service khác xác thực qua JWT claims. Theo thiết kế, Redis lưu OTP và cooldown. `customer_outbox` lưu `PHONE_VERIFICATION_REQUESTED` hoặc `EMAIL_VERIFICATION_REQUESTED` để `event-consumer` gửi SMS hoặc email. Với email, [event chỉ chứa tham chiếu đến challenge](../05-kafka/event-contracts.md#27-email_verification_requested).
 - **`customer_profiles`**: Lưu thông tin hồ sơ hiển thị và chương trình khách hàng thân thiết (Loyalty). Tự động khởi tạo 1-1 theo `users.id` khi khách hàng đăng ký, dùng để tích điểm (`reward_points`) và nâng hạng (`BRONZE` -> `PLATINUM`) sau khi đơn hàng hoàn tất.
 - **`customer_addresses`**: Sổ địa chỉ nhận hàng của khách (nhiều địa chỉ/khách, có cờ `is_default` và tọa độ `latitude`/`longitude` để tính phí ship). Khi checkout, hệ thống **snapshot** địa chỉ được chọn vào `parent_orders.shipping_address_snapshot` để nếu khách sửa/xóa địa chỉ sau này thì đơn cũ không bị thay đổi.
 
@@ -66,7 +66,7 @@
 | `role` | `VARCHAR(32)` | `NOT NULL, DEFAULT 'CUSTOMER'` | Vai trò chính (`CUSTOMER`, `SELLER`, `ADMIN`) |
 | `status` | `VARCHAR(32)` | `NOT NULL, DEFAULT 'ACTIVE'` | Trạng thái tài khoản (`ACTIVE`, `LOCKED`, `SUSPENDED`) |
 | `is_verified_phone_number` | `BOOLEAN` | `NOT NULL, DEFAULT FALSE` | Đã xác thực số điện thoại qua OTP SMS hay chưa *(đã có trong `User.java`, cần bổ sung vào Flyway migration)* |
-| `is_verified_email` | `BOOLEAN` | `NOT NULL, DEFAULT FALSE` | Đã xác thực email qua OTP/Link hay chưa *(đã có trong `User.java`, cần bổ sung vào Flyway migration)* |
+| `is_verified_email` | `BOOLEAN` | `NOT NULL, DEFAULT FALSE` | Trạng thái xác thực email. Cột được bổ sung trong Flyway V12. |
 | `created_at` | `DATE` | `NOT NULL, DEFAULT CURRENT_DATE` | Ngày tạo |
 | `updated_at` | `DATE` | `NOT NULL, DEFAULT CURRENT_DATE` | Ngày cập nhật |
 

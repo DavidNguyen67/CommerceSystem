@@ -197,32 +197,40 @@ Toàn bộ các yêu cầu xác thực, cấp phát token và phân quyền đư
 }
 ```
 
-### 2.9. Gửi mã / liên kết xác thực Email (Send Email Verification)
+### 2.9. Yêu cầu gửi OTP xác thực Email (Send Email Verification)
+
+> Đặc tả mục tiêu cho luồng gửi email qua Kafka. Service tiếp nhận yêu cầu gửi và worker gửi email bất đồng bộ.
+
 - **Method**: `POST`
 - **Path**: `/auth/verify/email/send`
 - **Auth**: Header `Authorization: Bearer <JWT_ACCESS_TOKEN>`
-- **Xử lý**: Tạo OTP/Token xác thực lưu Redis `auth:otp:EMAIL:{email}` (TTL 15 phút, cooldown 60 giây) và ghi event `EMAIL_VERIFICATION_REQUESTED` vào `customer_outbox` để `event-consumer` gửi email.
+- Chuẩn hóa `email` và kiểm tra địa chỉ này thuộc tài khoản xác định từ JWT. Lưu OTP 6 chữ số và `challengeId` trong Redis với TTL **15 phút**, đồng thời áp dụng cooldown **60 giây** theo tài khoản. Ghi `EMAIL_VERIFICATION_REQUESTED` vào `customer_outbox` theo [luồng gửi email qua Kafka](../05-kafka/kafka-architecture.md#6-luồng-gửi-otp-xác-thực-email).
 - **Request Body**:
 ```json
 {
   "email": "customer@example.com"
 }
 ```
-- **Response 200 OK**:
+- **Response 202 Accepted** sau khi bản ghi outbox được commit. Client có thể hiển thị thông báo đã tiếp nhận yêu cầu gửi.
 ```json
 {
-  "code": 200,
-  "message": "Success",
-  "data": "Verification email sent",
+  "code": 202,
+  "message": "Verification email request accepted",
+  "data": null,
   "timestamp": "2026-11-27T11:20:00Z"
 }
 ```
 
+- `400 Bad Request` nếu thiếu email hoặc sai định dạng.
+- `403 Forbidden` nếu email không thuộc tài khoản đang đăng nhập.
+- `429 Too Many Requests` nếu yêu cầu đến trong thời gian cooldown hoặc tài khoản đang bị giới hạn do nhập sai OTP.
+- `503 Service Unavailable` nếu service chưa thể lưu OTP hoặc xác nhận outbox đã commit.
+
 ### 2.10. Xác nhận Email (Confirm Email Verification)
 - **Method**: `POST`
-- **Path**: `/auth/verify/email/confirm`
-- **Auth**: Header `Authorization: Bearer <JWT_ACCESS_TOKEN>` (hoặc Public nếu xác thực qua token link)
-- **Xử lý**: Kiểm tra OTP/token trong Redis, cập nhật `users.is_verified_email = true` và xóa key khỏi Redis.
+- **Path**: `/auth/verify/confirm` (endpoint chung dưới `/api/v1`)
+- **Auth**: Header `Authorization: Bearer <JWT_ACCESS_TOKEN>`
+- Gửi `email` và `otp` để chọn nhánh xác thực email. `identity-service` chỉ xác thực email của tài khoản đang đăng nhập, kiểm tra OTP hiện hành trong Redis và đặt `users.is_verified_email = true` khi xác thực thành công. Mỗi OTP chỉ được dùng một lần.
 - **Request Body**:
 ```json
 {
@@ -239,6 +247,10 @@ Toàn bộ các yêu cầu xác thực, cấp phát token và phân quyền đư
   "timestamp": "2026-11-27T11:20:00Z"
 }
 ```
+
+- `400 Bad Request` nếu OTP sai hoặc hết hạn.
+- `403 Forbidden` nếu email không thuộc tài khoản đang đăng nhập.
+- `429 Too Many Requests` khi đã đạt giới hạn 5 lần nhập sai.
 
 ---
 

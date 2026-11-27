@@ -176,3 +176,23 @@ Mọi message phát tán trên Kafka cluster bắt buộc phải tuân thủ c�
   "submittedAt": "2026-11-20T16:15:00Z"
 }
 ```
+
+---
+
+### 2.7. `EMAIL_VERIFICATION_REQUESTED`
+
+- **Topic** `identity.email-verification.requested`
+- **Partition key** `userId`
+- **Nguồn** `identity-service` ghi `customer_outbox`, Debezium phát Kafka, `event-consumer` xử lý.
+- **Envelope** Tuân theo [chuẩn event](#1-chuẩn-đóng-gói-sự-kiện-standard-event-envelope). Dùng ID của bản ghi outbox làm `eventId`, `eventType` là `EMAIL_VERIFICATION_REQUESTED`, `sourceService` là `identity-service` và `version` là `1`. Giữ nguyên `eventId` khi giao lại hoặc retry cùng sự kiện.
+- **Payload** Có ba trường bắt buộc. `userId` và `challengeId` là UUID. `expiresAt` là thời điểm OTP hết hạn theo UTC. Worker dùng `userId` và `challengeId` để đọc email đích và OTP trong Redis. Kafka key, headers và payload chỉ mang định danh và thời điểm liên quan đến yêu cầu.
+
+```json
+{
+  "userId": "c71a39d8-912f-410a-b28e-5b1239c81190",
+  "challengeId": "88213a21-ed35-4d16-bda8-b91e573c58a4",
+  "expiresAt": "2026-11-27T11:35:00Z"
+}
+```
+
+Xem [quy tắc xử lý OTP, retry và DLQ](kafka-architecture.md#6-luồng-gửi-otp-xác-thực-email).

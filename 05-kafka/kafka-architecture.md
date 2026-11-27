@@ -22,6 +22,7 @@
 | `product.events` | 12 | 3 | 2 | `productId` | Đồng bộ dữ liệu SPU/SKU sang Search Service và khởi tạo tồn kho |
 | `shipping.events` | 12 | 3 | 2 | `subOrderId` | Cập nhật hành trình vận chuyển theo từng gói hàng của Seller |
 | `review.events` | 12 | 3 | 2 | `productId` | Phát tán đánh giá mới, cập nhật Rating Shop/SPU và cộng xu thưởng |
+| `identity.email-verification.requested` | 3 | 3 | 2 | `userId` | Tiếp nhận yêu cầu gửi OTP xác thực email. Cấu hình khởi điểm cho cụm 3 broker. |
 
 ---
 
@@ -138,3 +139,53 @@ stateDiagram-v2
     DLQ --> AlertPagerDuty: Trigger Urgent Alert
     DLQ --> ManualIntervention: Admin Dashboard Replay
 ```
+
+---
+
+## 6. Luồng gửi OTP xác thực email
+
+Đây là thiết kế mục tiêu cho [API xác thực email](../06-api/api-specifications.md#29-yêu-cầu-gửi-otp-xác-thực-email-send-email-verification), theo [ADR-002](../11-adr/ADR-002-transactional-outbox-inbox-cdc.md). `identity-service` quản lý OTP và trạng thái xác thực. `event-consumer` xử lý gửi email qua SMTP hoặc nhà cung cấp email.
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant I as identity-service
+    participant R as Redis
+    participant O as customer_outbox
+    participant D as Debezium
+    participant K as Kafka
+    participant W as event-consumer
+    participant M as Nhà cung cấp email
+
+    C->>I: POST /api/v1/auth/verify/email/send
+    I->>R: Tạo OTP và challenge hiện hành
+    I->>O: Commit EMAIL_VERIFICATION_REQUESTED
+    I-->>C: 202 Accepted
+    O-->>D: Thay đổi trong PostgreSQL WAL
+    D->>K: Publish theo userId
+    K->>W: Giao sự kiện
+    W->>R: Đọc challenge hiện hành
+    W->>M: Gửi OTP còn hiệu lực
+    M-->>W: Xác nhận tiếp nhận thư
+    W->>W: Lưu kết quả gửi theo eventId
+    W-->>K: Commit offset
+```
+
+### Tiếp nhận và phát sự kiện
+
+1. `identity-service` xác định `userId` từ JWT và đối chiếu email đã chuẩn hóa với tài khoản trước khi cấp OTP. Redis ghi nguyên tử challenge hiện hành và cooldown 60 giây theo tài khoản. Challenge gắn với email tại thời điểm cấp, tồn tại tối đa 15 phút và bị vô hiệu hóa khi được dùng hoặc bị thay thế.
+2. Service ghi `customer_outbox` sau khi lưu challenge. Dùng `aggregate_id` là `userId` và `event_type` là `EMAIL_VERIFICATION_REQUESTED`. Redis và PostgreSQL có transaction riêng. Nếu outbox chắc chắn rollback, chỉ dọn OTP và cooldown khi chúng vẫn thuộc yêu cầu vừa thất bại. Nếu chưa xác định được kết quả commit, để Redis tự hết hạn. API trả `202` sau khi xác nhận outbox đã commit.
+3. Cấu hình Kafka Connect với Debezium PostgreSQL, logical replication và publication cho `customer_outbox`. Định tuyến theo `event_type` và ánh xạ `aggregate_id` thành Kafka key. Giá trị Kafka theo [hợp đồng `EMAIL_VERIFICATION_REQUESTED`](event-contracts.md#27-email_verification_requested), với `correlationId` lấy từ yêu cầu API để truy vết từ lúc tiếp nhận đến lúc gửi.
+
+### Gửi, retry và chống trùng
+
+- Worker kiểm tra `expiresAt` và đối chiếu `challengeId` với challenge hiện hành trong Redis ngay trước mỗi lần gửi. Challenge hết hạn, đã dùng hoặc bị thay thế được ghi nhận là bỏ qua rồi commit offset. Redis tạm thời lỗi được xử lý như lỗi có thể retry.
+- Lưu trạng thái gửi phía `event-consumer` theo `eventId`. Dùng thao tác nguyên tử để một worker giành quyền gửi có thời hạn. Khi nhà cung cấp tiếp nhận thư, ghi kết quả bền vững rồi commit offset. Bản giao lại của sự kiện đã gửi được xác nhận ngay. Nếu nhà cung cấp hỗ trợ idempotency key, dùng `eventId` cho mọi lần thử. Với SMTP thuần, worker vẫn có thể gửi trùng nếu SMTP đã tiếp nhận thư trước khi worker kịp lưu kết quả.
+- Dùng retry topic không chặn với khoảng chờ 5 giây, 30 giây và 5 phút. Sau lỗi vĩnh viễn hoặc khi đã hết lượt thử, chuyển sự kiện sang `identity.email-verification.requested.dlq`. Chỉ commit offset nguồn sau khi lưu được kết quả cuối hoặc xác nhận đã chuyển thành công sang retry topic/DLQ. Khi replay, vẫn áp dụng kiểm tra challenge và hạn dùng.
+- Theo dõi độ trễ từ lúc tiếp nhận đến lúc nhà cung cấp nhận thư, tỷ lệ retry, số challenge hết hạn trước khi gửi và số event vào DLQ. Ghi log bằng `eventId` và `correlationId`. Giữ OTP và email đầy đủ ngoài log, Kafka và DLQ.
+
+### Kiểm thử tích hợp
+
+- Yêu cầu hợp lệ nhận `202`, đi qua outbox và Kafka rồi đến hộp thư SMTP kiểm thử. OTP nhận được xác thực được bằng endpoint hiện hành.
+- Khi Kafka tạm gián đoạn, bản ghi outbox vẫn tồn tại. Sau khi broker phục hồi, worker gửi nếu challenge còn hiệu lực hoặc bỏ qua nếu đã hết hạn.
+- Khi Kafka giao lại một `eventId` đã gửi, worker chỉ xác nhận offset. Khi người dùng đã yêu cầu mã mới, sự kiện retry của mã cũ được bỏ qua.
