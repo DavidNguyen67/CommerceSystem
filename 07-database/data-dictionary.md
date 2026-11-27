@@ -28,7 +28,29 @@
 
 ---
 
+## 1.5. MA TRẬN LUỒNG NGHIỆP VỤ -> BẢNG SỬ DỤNG
+
+| Luồng nghiệp vụ | Bảng đọc (Read) | Bảng ghi / cập nhật (Write) | Service thực thi |
+|---|---|---|---|
+| **Đăng ký / Đăng nhập / Profile** | `users`, `customer_profiles` | `users`, `customer_profiles`, `customer_addresses`, `customer_outbox` | `identity-service`, `api-service` |
+| **Mở Shop & Quản lý kho bán** | `users`, `shops` | `shops`, `seller_addresses`, `shop_categories`, `seller_outbox` | `api-service` |
+| **Đăng bán sản phẩm (SPU -> SKU)** | `categories`, `brands`, `shops` | `products`, `product_images`, `product_options`, `product_option_values`, `product_skus`, `sku_option_combinations`, `inventories`, `product_outbox` | `api-service`, `event-consumer` |
+| **Checkout & Tách đơn Multi-Vendor** | `customer_addresses`, `product_skus`, `vouchers`, `voucher_conditions`, `flash_sale_items` | `parent_orders`, `sub_orders`, `order_items`, `order_outbox`, `saga_instances`, `saga_step_executions` | `api-service`, `saga-orchestrator` |
+| **Giữ kho & Hoàn kho (Anti-Overselling)** | `inventories`, `inventory_reservations` | `inventories`, `inventory_reservations`, `inventory_audit_logs`, `inventory_outbox`, `inventory_inbox` | `event-consumer`, `job-service` |
+| **Áp Voucher & Flash Sale** | `campaigns`, `vouchers`, `voucher_conditions`, `flash_sales`, `flash_sale_items` | `vouchers`, `voucher_redemptions`, `flash_sale_items`, `promotion_outbox` | `api-service`, `event-consumer` |
+| **Thanh toán, Escrow & Hoàn tiền** | `parent_orders`, `sub_orders`, `payment_transactions` | `payment_transactions`, `escrow_ledgers`, `payment_refunds`, `payment_outbox`, `payment_inbox` | `api-service` (webhook), `event-consumer`, `job-service` |
+| **Vận chuyển & Tracking** | `shipping_carriers`, `seller_addresses`, `sub_orders` | `shipments`, `shipment_tracking_events`, `sub_orders`, `shipping_outbox` | `event-consumer`, `api-service` |
+| **Đánh giá sản phẩm** | `order_items`, `product_reviews` | `product_reviews`, `review_media`, `review_replies`, `review_outbox` | `api-service` |
+| **Housekeeping & Hết hạn tự động** | `parent_orders`, `inventory_reservations`, `escrow_ledgers` | `QRTZ_*`, `parent_orders`, `inventory_reservations`, `escrow_ledgers` | `job-service` |
+
+---
+
 ## 2. V1 — CUSTOMER & IDENTITY (`V1__init_customer_identity_schema.sql`)
+
+### Chức năng nghiệp vụ các bảng V1
+- **`users`**: Trung tâm xác thực & phân quyền (AuthN/AuthZ). Lưu thông tin đăng nhập (`phone_number`/`email`), mật khẩu băm (`password_hash`), vai trò (`CUSTOMER`/`SELLER`/`ADMIN`) và trạng thái khóa tài khoản (`ACTIVE`/`LOCKED`/`SUSPENDED`). `identity-service` đọc bảng này khi login/register và phát JWT OIDC; các service khác không query bảng này mà xác thực qua JWT claims.
+- **`customer_profiles`**: Lưu thông tin hồ sơ hiển thị và chương trình khách hàng thân thiết (Loyalty). Tự động khởi tạo 1-1 theo `users.id` khi khách hàng đăng ký, dùng để tích điểm (`reward_points`) và nâng hạng (`BRONZE` -> `PLATINUM`) sau khi đơn hàng hoàn tất.
+- **`customer_addresses`**: Sổ địa chỉ nhận hàng của khách (nhiều địa chỉ/khách, có cờ `is_default` và tọa độ `latitude`/`longitude` để tính phí ship). Khi checkout, hệ thống **snapshot** địa chỉ được chọn vào `parent_orders.shipping_address_snapshot` để nếu khách sửa/xóa địa chỉ sau này thì đơn cũ không bị thay đổi.
 
 ### 2.1. `users` — Entity: `User`
 - **PK:** `id` (`UUID`) | **Unique:** `phone_number`, `email`
@@ -82,6 +104,11 @@
 
 ## 3. V2 — SELLER & SHOP (`V2__init_seller_shop_schema.sql`)
 
+### Chức năng nghiệp vụ các bảng V2
+- **`shops`**: Đại diện cho một Gian hàng / Nhà bán trên sàn (1 `user_id` sở hữu 1 shop). Lưu thông tin nhận diện (`shop_name`, `shop_slug`, logo/banner), phân loại uy tín (`STANDARD`, `PREFERRED`, `MALL`), trạng thái hoạt động (`ACTIVE`, `SUSPENDED`, `CLOSED`) và các chỉ số vận hành (`rating_average`, `rating_count`, `response_rate`) được cập nhật bất đồng bộ từ sự kiện review/chat.
+- **`seller_addresses`**: Quản lý các điểm kho của Shop theo mục đích (`PICKUP`: kho lấy hàng, `RETURN`: kho nhận hàng hoàn trả, `WAREHOUSE`: kho lưu trữ). Khi tạo vận đơn (`shipments`), hệ thống lấy địa chỉ `PICKUP` mặc định để **snapshot** vào `pickup_address_snapshot`.
+- **`shop_categories`**: Bộ sưu tập / danh mục nội bộ do Seller tự tạo để sắp xếp sản phẩm trên trang chủ riêng của Shop (khác với `categories` là cây ngành hàng chuẩn của toàn sàn).
+
 ### 3.1. `shops` — Entity: `Shop`
 - **PK:** `id` (`UUID`) | **Unique:** `user_id`, `shop_name`, `shop_slug`
 - **Enums:** `ShopType` (`STANDARD`, `MALL`, `PREFERRED`), `ShopStatus` (`ACTIVE`, `SUSPENDED`, `CLOSED`)
@@ -131,6 +158,15 @@
 ---
 
 ## 4. V3 — PRODUCT CATALOG (`V3__init_product_catalog_schema.sql`)
+
+### Chức năng nghiệp vụ các bảng V3 (Mô hình SPU – SKU)
+- **`categories`**: Cây ngành hàng chuẩn của toàn sàn (hỗ trợ đa cấp qua `parent_id`, `level`). Dùng để phân loại sản phẩm, dựng menu điều hướng, lọc tìm kiếm và áp dụng điều kiện voucher theo ngành hàng.
+- **`brands`**: Danh mục thương hiệu sản phẩm (Apple, Samsung, Nike...), có cờ `is_mall_brand` để gắn nhãn chính hãng và lọc tìm kiếm theo thương hiệu.
+- **`products` (SPU — Standard Product Unit)**: Thông tin gốc của sản phẩm dùng chung cho mọi biến thể (tên, mô tả, ngành hàng, thương hiệu, tình trạng `NEW`/`USED`/`REFURBISHED`, bảo hành, trạng thái duyệt/bán). Một SPU không bán trực tiếp mà phải có ít nhất một `product_skus`.
+- **`product_images`**: Thư viện ảnh/media trưng bày của sản phẩm gốc, có `is_primary` để chọn ảnh đại diện trên thẻ sản phẩm và `display_order` để sắp xếp slide.
+- **`product_options` & `product_option_values`**: Định nghĩa các trục phân loại biến thể của SPU (ví dụ `product_options.name = "Màu sắc"` -> `product_option_values`: `"Đỏ"`, `"Xanh"`; `"Kích cỡ"` -> `"M"`, `"L"`). Mỗi giá trị có thể gắn `image_url` riêng (ví dụ chọn màu Đỏ sẽ đổi ảnh sang áo Đỏ).
+- **`product_skus` (SKU — Stock Keeping Unit)**: Đơn vị hàng hóa thực tế có thể cho vào giỏ và đặt mua. Lưu giá niêm yết (`original_price`), giá bán (`sale_price`), mã vạch (`barcode`) và kích thước/khối lượng đóng gói (`weight_grams`, `length_cm`, `width_cm`, `height_cm`) để tính phí vận chuyển.
+- **`sku_option_combinations`**: Bảng nối N-N ánh xạ mỗi SKU với tổ hợp giá trị phân loại cụ thể (ví dụ `SKU-001` = `Màu Đỏ` + `Size L`), đảm bảo tính duy nhất của biến thể.
 
 ### 4.1. `categories` — Entity: `Category`
 - **PK:** `id` (`UUID`) | **FK:** `parent_id` -> `categories(id) ON DELETE RESTRICT` | **Unique:** `slug` | **Index:** `idx_categories_parent(parent_id)`
@@ -194,6 +230,11 @@
 
 ## 5. V4 — INVENTORY (`V4__init_inventory_schema.sql`)
 
+### Chức năng nghiệp vụ các bảng V4 (Chống Overselling & Kiểm toán)
+- **`inventories`**: Lưu tồn kho theo từng `sku_id`. Tách bạch `physical_quantity` (hàng thực tế trong kho) và `reserved_quantity` (hàng đang bị giữ cho đơn chưa thanh toán/chưa xuất). Tồn khả dụng (Available Stock) = `physical_quantity - reserved_quantity`. Dùng `@Version` + Conditional Atomic Update (`WHERE physical_quantity - reserved_quantity >= :qty`) để ngăn bán vượt tồn kho khi flash sale có hàng nghìn request đồng thời.
+- **`inventory_reservations`**: Ghi nhận từng phiếu giữ kho gắn với `order_id` và thời hạn `expires_at`. Khi khách đặt đơn -> tạo bản ghi `RESERVED` và tăng `reserved_quantity`; khi thanh toán thành công -> chuyển `COMMITTED` và trừ cả `physical_quantity` lẫn `reserved_quantity`; khi hủy đơn hoặc quá hạn (`job-service` quét `status = 'RESERVED' AND expires_at < NOW()`) -> chuyển `RELEASED`/`EXPIRED` và trả lại `reserved_quantity`.
+- **`inventory_audit_logs`**: Sổ cái bất biến (append-only) ghi lại mọi biến động tồn kho (nhập kho, giữ kho, xuất kho, hoàn kho, điều chỉnh kiểm kê) kèm số dư `balance_physical`, `balance_reserved` và `reference_id` (mã đơn/phiếu nhập) để đối soát.
+
 ### 5.1. `inventories` — Entity: `Inventory`
 - **PK:** `sku_id` (`VARCHAR(64)`) | **Index:** `idx_inventories_seller(seller_id)`
 - **Constraints:** `physical_quantity >= 0`, `reserved_quantity >= 0`, `chk_stock_integrity (physical_quantity >= reserved_quantity)`
@@ -230,6 +271,11 @@
 
 ## 6. V5 — ORDER (`V5__init_order_schema.sql`)
 
+### Chức năng nghiệp vụ các bảng V5 (Mô hình Đơn Tổng – Đơn Con Multi-Vendor)
+- **`parent_orders`**: Đơn hàng tổng đại diện cho 1 lần khách hàng bấm Checkout (có thể mua hàng của nhiều Shop cùng lúc). Lưu tổng tiền thanh toán (`grand_total`), phương thức thanh toán, `shipping_address_snapshot` (JSONB bất biến), và `idempotency_key` (`UNIQUE(customer_id, idempotency_key)`) để chống tạo trùng đơn khi client retry mạng.
+- **`sub_orders`**: Khi checkout giỏ hàng đa người bán, `parent_orders` được tách thành nhiều `sub_orders` theo từng `seller_id`. Mỗi `sub_orders` có vòng đời vận hành độc lập (Shop xác nhận, đóng gói, gắn `waybill_code` vận đơn, giao hàng, tính `seller_payout` sau khi trừ chiết khấu/phí).
+- **`order_items`**: Chi tiết từng SKU trong một `sub_order`. Lưu **snapshot** tên sản phẩm, tên SKU, ảnh, đơn giá (`unit_price`) và thành tiền tại thời điểm đặt hàng để lịch sử đơn hàng luôn chính xác dù Shop có đổi giá hoặc xóa sản phẩm sau đó.
+
 ### 6.1. `parent_orders` — Entity: `ParentOrder`
 - **PK:** `id` (`UUID`) | **Unique:** `uq_customer_idempotency (customer_id, idempotency_key)`
 - **Indexes:** `idx_parent_orders_customer(customer_id)`, `idx_parent_orders_status(status)`
@@ -263,6 +309,10 @@
 
 ## 7. V6 — SAGA ORCHESTRATOR (`V6__init_saga_orchestrator_schema.sql`)
 
+### Chức năng nghiệp vụ các bảng V6 (Điều phối giao dịch phân tán)
+- **`saga_instances`**: Lưu trạng thái máy trạng thái (State Machine) của một giao dịch phân tán gắn với `order_id` và `correlation_id` duy nhất (ví dụ luồng `CREATE_ORDER_SAGA`: `RESERVE_INVENTORY` -> `APPLY_PROMOTION` -> `CREATE_PAYMENT` -> `CONFIRM_ORDER`). Khi một bước thất bại, Orchestrator dựa vào `current_step` và `payload` để kích hoạt các bước bù trừ (Compensating Transactions) theo thứ tự ngược lại.
+- **`saga_step_executions`**: Nhật ký chi tiết từng bước gọi sang microservice đích (`target_service`), lưu `request_payload`, `response_payload`, số lần `retry_count`, lỗi `error_detail` và thời gian bắt đầu/kết thúc. Phục vụ debug, theo dõi SLA và tự động retry/recover khi sự cố.
+
 ### 7.1. `saga_instances` — Entity: `SagaInstance`
 - **PK:** `id` (`UUID`) | **Unique:** `correlation_id` | **Indexes:** `idx_saga_status(status)`, `idx_saga_order(order_id)`
 - **Enums:** `SagaType`, `SagaStatus`
@@ -277,6 +327,11 @@
 
 ## 8. V7 — PAYMENT & ESCROW (`V7__init_payment_schema.sql`)
 
+### Chức năng nghiệp vụ các bảng V7 (Thanh toán, Ký quỹ & Hoàn tiền)
+- **`payment_transactions`**: Ghi nhận giao dịch thanh toán của khách hàng cho `parent_orders` (`order_id` unique) qua cổng thanh toán (VNPay, MoMo, Stripe, COD). Lưu `gateway_transaction_id` để chống xử lý trùng webhook, trạng thái thanh toán (`PENDING`, `SUCCESS`, `FAILED`) và `raw_response` JSONB để đối soát tài chính.
+- **`escrow_ledgers`**: Tài khoản ký quỹ (Escrow) bảo vệ người mua theo từng `sub_order_id`. Tiền thanh toán của khách không chuyển thẳng cho Seller ngay mà được giữ ở trạng thái `HOLDING` cho đến qua thời gian bảo vệ/đổi trả (`release_due_at`). Khi đến hạn và không có khiếu nại, `job-service` hoặc `event-consumer` giải ngân (`RELEASED`/`SETTLED`) số tiền `net_payout_amount` (đã trừ `platform_fee`) cho Seller.
+- **`payment_refunds`**: Lưu yêu cầu và kết quả hoàn tiền (`order_id`, hoặc hoàn từng phần theo `sub_order_id`) khi đơn bị hủy sau thanh toán, giao thất bại hoặc trả hàng thành công, gắn với `refund_gateway_id` để đối soát cổng thanh toán.
+
 - **`payment_transactions`** (`PaymentTransaction`): `id (UUID PK)`, `order_id (UUID UNIQUE)`, `gateway_transaction_id (VARCHAR(128) UNIQUE)`, `amount (NUMERIC(15,2))`, `currency (VARCHAR(8) DEFAULT 'VND')`, `status (VARCHAR(32) — PaymentTransactionStatus)`, `payment_method (VARCHAR(32) — PaymentMethod)`, `raw_response (JSONB)`, `created_at`, `updated_at`.
 - **`escrow_ledgers`** (`EscrowLedger`): `id (UUID PK)`, `sub_order_id (UUID UNIQUE)`, `seller_id (UUID)`, `net_payout_amount (NUMERIC(15,2))`, `platform_fee (NUMERIC(15,2))`, `status (VARCHAR(32) — EscrowStatus)`, `release_due_at (TIMESTAMPTZ)`, `settled_at (TIMESTAMPTZ)`, `created_at`, `updated_at`. Indexes: `idx_escrow_seller(seller_id)`, `idx_escrow_status_due(status, release_due_at)`.
 - **`payment_refunds`** (`PaymentRefund`): `id (UUID PK)`, `order_id (UUID)`, `sub_order_id (UUID NULL)`, `refund_gateway_id (VARCHAR(128) UNIQUE)`, `amount (NUMERIC(15,2))`, `reason (VARCHAR(255))`, `status (VARCHAR(32) — PaymentRefundStatus)`, `created_at`, `updated_at`.
@@ -284,6 +339,14 @@
 ---
 
 ## 9. V8 — PROMOTION & FLASH SALE (`V8__init_promotion_schema.sql`)
+
+### Chức năng nghiệp vụ các bảng V8
+- **`campaigns`**: Chiến dịch khuyến mãi lớn theo mùa/sự kiện (ví dụ: *11.11 Siêu Sale*, *Tết 2026*), gom nhóm nhiều `vouchers` và `flash_sales` dưới cùng một banner và khung thời gian.
+- **`vouchers`**: Định nghĩa mã giảm giá của Sàn (`seller_id IS NULL`) hoặc của Shop (`seller_id IS NOT NULL`). Hỗ trợ giảm theo phần trăm (`PERCENTAGE` kèm trần `max_discount_amount`) hoặc số tiền cố định (`FIXED_AMOUNT`), kiểm soát đơn tối thiểu (`min_spend`), tổng lượt dùng toàn sàn (`total_usage_limit` với constraint `current_usage_count <= total_usage_limit`) và giới hạn mỗi user (`per_user_limit`).
+- **`voucher_conditions`**: Danh sách điều kiện ràng buộc động (lưu dạng `condition_type` + `condition_value` JSONB), ví dụ: chỉ áp dụng cho danh mục Điện tử, chỉ áp dụng cho phương thức thanh toán ví điện tử, hoặc chỉ cho khách hàng mới/hạng GOLD.
+- **`voucher_redemptions`**: Nhật ký mỗi lần khách hàng sử dụng voucher cho đơn hàng (`customer_id`, `voucher_id`, `order_id`, `discount_amount`, `status`). Dùng để đếm số lần đã dùng của từng user (`per_user_limit`) và hoàn lượt voucher nếu đơn bị hủy.
+- **`flash_sales`**: Khung giờ Flash Sale (ví dụ *00:00 - 02:00*, *12:00 - 14:00*) với trạng thái `SCHEDULED` -> `ACTIVE` -> `ENDED`.
+- **`flash_sale_items`**: Danh sách SKU tham gia từng khung giờ Flash Sale với giá ưu đãi `flash_sale_price`, quỹ hàng phân bổ riêng `stock_allocated`, số lượng đã bán `stock_sold` (`stock_sold <= stock_allocated`) và giới hạn mua mỗi người (`user_purchase_limit`) để chống đầu cơ/bot.
 
 - **`campaigns`** (`Campaign`): `id (UUID PK)`, `title (VARCHAR(255))`, `slug (VARCHAR(255) UNIQUE)`, `banner_url (VARCHAR(512))`, `start_time (TIMESTAMPTZ)`, `end_time (TIMESTAMPTZ)`, `status (VARCHAR(32) DEFAULT 'UPCOMING' — CampaignStatus)`, `created_at`, `updated_at`.
 - **`vouchers`** (`Voucher`): `id (UUID PK)`, `campaign_id (UUID FK -> campaigns)`, `seller_id (UUID NULL)`, `code (VARCHAR(64) UNIQUE)`, `name (VARCHAR(255))`, `discount_type (VARCHAR(32) — DiscountType)`, `discount_value (NUMERIC(15,2))`, `max_discount_amount (NUMERIC(15,2))`, `min_spend (NUMERIC(15,2) DEFAULT 0.00)`, `total_usage_limit (INT DEFAULT 1000)`, `current_usage_count (INT DEFAULT 0)`, `per_user_limit (INT DEFAULT 1)`, `valid_from (TIMESTAMPTZ)`, `expires_at (TIMESTAMPTZ)`, `is_active (BOOLEAN DEFAULT TRUE)`, `created_at`, `updated_at`. Check: `chk_voucher_usage (current_usage_count <= total_usage_limit)`. Indexes: `idx_vouchers_code`, `idx_vouchers_seller`.
@@ -296,6 +359,11 @@
 
 ## 10. V9 — SHIPPING & FULFILLMENT (`V9__init_shipping_schema.sql`)
 
+### Chức năng nghiệp vụ các bảng V9
+- **`shipping_carriers`**: Danh mục đối tác vận chuyển tích hợp (GHN, GHTK, Viettel Post, J&T...), lưu mã hãng (`carrier_code`), hotline và `api_endpoint` để gọi API tạo vận đơn / tra cứu hành trình.
+- **`shipments`**: Vận đơn giao hàng gắn 1-1 với từng `sub_order_id` (`waybill_number` là mã vận đơn duy nhất). Lưu **snapshot** địa chỉ lấy hàng (`pickup_address_snapshot`) và địa chỉ giao hàng (`delivery_address_snapshot`), khối lượng gói hàng, tiền thu hộ (`cod_amount`), phí ship và thời gian dự kiến/thực tế giao hàng.
+- **`shipment_tracking_events`**: Lịch sử từng chặng di chuyển của kiện hàng (nhận hàng tại bưu cục -> trung chuyển kho -> đang giao -> giao thành công/hoàn hàng), nhận từ webhook của đơn vị vận chuyển để hiển thị timeline cho người mua và kích hoạt cập nhật trạng thái `sub_orders`.
+
 - **`shipping_carriers`** (`ShippingCarrier`): `id (UUID PK)`, `carrier_code (VARCHAR(32) UNIQUE — CarrierCode)`, `carrier_name (VARCHAR(128))`, `contact_hotline (VARCHAR(20))`, `api_endpoint (VARCHAR(255))`, `is_active (BOOLEAN DEFAULT TRUE)`, `created_at`, `updated_at`.
 - **`shipments`** (`Shipment`): `id (UUID PK)`, `sub_order_id (UUID UNIQUE)`, `carrier_id (UUID FK -> shipping_carriers)`, `waybill_number (VARCHAR(64) UNIQUE)`, `status (VARCHAR(32) — ShipmentStatus)`, `pickup_address_snapshot (JSONB)`, `delivery_address_snapshot (JSONB)`, `package_weight_grams (INT)`, `cod_amount (NUMERIC(15,2) DEFAULT 0.00)`, `shipping_fee (NUMERIC(15,2))`, `estimated_delivery_at (TIMESTAMPTZ)`, `actual_delivery_at (TIMESTAMPTZ)`, `created_at`, `updated_at`. Indexes: `idx_shipments_carrier`, `idx_shipments_waybill`.
 - **`shipment_tracking_events`** (`ShipmentTrackingEvent`): `id (UUID PK)`, `shipment_id (UUID FK -> shipments ON DELETE CASCADE)`, `event_status (VARCHAR(64) — TrackingEventStatus)`, `hub_location (VARCHAR(255))`, `event_description (TEXT)`, `occurred_at (TIMESTAMPTZ)`, `created_at (TIMESTAMPTZ DEFAULT NOW())`. Index: `idx_tracking_shipment(shipment_id)`.
@@ -303,6 +371,11 @@
 ---
 
 ## 11. V10 — PRODUCT REVIEW (`V10__init_review_schema.sql`)
+
+### Chức năng nghiệp vụ các bảng V10
+- **`product_reviews`**: Đánh giá của người mua sau khi nhận hàng thành công. Ràng buộc `order_item_id UNIQUE` đảm bảo **chỉ người đã mua mặt hàng đó mới được đánh giá 1 lần** (Verified Purchase). Hỗ trợ chấm 1–5 sao, nhận xét, ẩn danh (`is_anonymous`) và ẩn vi phạm (`is_hidden`). Sau khi tạo, phát event qua `review_outbox` để cập nhật lại điểm trung bình của `shops` và sản phẩm.
+- **`review_media`**: Ảnh và video thực tế khách hàng đính kèm vào đánh giá (tối ưu hiển thị theo `display_order`).
+- **`review_replies`**: Phản hồi chính thức của Shop cho từng đánh giá (`review_id UNIQUE` — mỗi đánh giá chỉ có 1 phản hồi từ Shop).
 
 - **`product_reviews`** (`ProductReview`): `id (UUID PK)`, `order_item_id (UUID UNIQUE)`, `product_id (UUID)`, `sku_id (VARCHAR(64))`, `customer_id (UUID)`, `shop_id (UUID)`, `rating_star (INT CHECK 1..5)`, `comment (TEXT)`, `is_anonymous (BOOLEAN DEFAULT FALSE)`, `is_hidden (BOOLEAN DEFAULT FALSE)`, `created_at`, `updated_at`. Indexes: `idx_reviews_product`, `idx_reviews_shop`.
 - **`review_media`** (`ReviewMedia`): `id (UUID PK)`, `review_id (UUID FK -> product_reviews ON DELETE CASCADE)`, `media_type (VARCHAR(16) — ReviewMediaType)`, `media_url (VARCHAR(512))`, `display_order (INT DEFAULT 0)`, `created_at`, `updated_at`.
@@ -312,6 +385,10 @@
 
 ## 12. BẢNG OUTBOX & INBOX (18 BẢNG — V1 ĐẾN V10)
 
+### Chức năng nghiệp vụ Outbox & Inbox
+- **`*_outbox` (Transactional Outbox Pattern)**: Khi một service thay đổi dữ liệu nghiệp vụ (ví dụ tạo `parent_orders`, trừ `inventories`, tạo `product_reviews`), service ghi thêm 1 bản ghi sự kiện vào bảng `*_outbox` **trong cùng một Database Transaction**. Debezium CDC (hoặc worker) đọc bảng này để đẩy sự kiện lên Kafka, đảm bảo không bao giờ xảy ra tình trạng "lưu DB thành công nhưng mất message Kafka".
+- **`*_inbox` (Idempotent Consumer Pattern)**: Trước khi consumer xử lý một message từ Kafka, nó kiểm tra và insert `message_id` vào `*_inbox` (PK). Nếu `message_id` đã tồn tại, consumer bỏ qua để đảm bảo mỗi sự kiện chỉ được xử lý đúng một lần (Exactly-once processing), tránh trừ kho hoặc cộng tiền 2 lần khi Kafka retry.
+
 Tất cả bảng `*_outbox` và `*_inbox` có cấu trúc đồng nhất:
 - **`*_outbox`** (`id UUID PK`, `aggregate_type VARCHAR(64)`, `aggregate_id VARCHAR(64)`, `event_type VARCHAR(128)`, `payload JSONB`, `created_at TIMESTAMPTZ DEFAULT NOW()`): `customer_outbox`, `seller_outbox`, `product_outbox`, `inventory_outbox`, `order_outbox`, `saga_outbox`, `payment_outbox`, `promotion_outbox`, `shipping_outbox`, `review_outbox` (10 bảng).
 - **`*_inbox`** (`message_id VARCHAR(64) PK`, `consumer_group VARCHAR(128)`, `processed_at TIMESTAMPTZ DEFAULT NOW()`): `customer_inbox`, `seller_inbox`, `product_inbox`, `inventory_inbox`, `order_inbox`, `saga_inbox`, `payment_inbox`, `shipping_inbox` (8 bảng).
@@ -319,6 +396,10 @@ Tất cả bảng `*_outbox` và `*_inbox` có cấu trúc đồng nhất:
 ---
 
 ## 13. V11 — QUARTZ SCHEDULER (`V11__init_quartz_schema.sql` — 11 BẢNG)
+
+### Chức năng nghiệp vụ Quartz Scheduler (`job-service`)
+- Cho phép `job-service` chạy nhiều node song song (Clustered Mode) mà **không bị chạy trùng lặp job** nhờ cơ chế khóa phân tán trên PostgreSQL (`QRTZ_LOCKS`, `QRTZ_SCHEDULER_STATE`).
+- Phục vụ các tác vụ nền định kỳ của sàn: hủy đơn quá hạn thanh toán (`OrderExpirationJob`), giải phóng `inventory_reservations` hết hạn `expires_at`, giải ngân `escrow_ledgers` đến hạn `release_due_at`, và dọn dẹp dữ liệu `*_outbox` / `*_inbox` cũ.
 
 Dùng cho `job-service` với `PostgreSQLDelegate` (Clustered JDBC JobStore):
 - `QRTZ_JOB_DETAILS`: Định nghĩa job (`SCHED_NAME`, `JOB_NAME`, `JOB_GROUP` PK).
