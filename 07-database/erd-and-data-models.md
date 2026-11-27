@@ -23,7 +23,10 @@ Hệ thống CommerceFlow được thiết kế theo mô hình **Database-per-Se
 | 8 | **Promotion Service** | `commerceflow_promotion_db` | Chiến dịch Campaign, Flash Sale, Voucher sàn/shop, điều kiện áp dụng, hạn ngạch |
 | 9 | **Shipping Service** | `commerceflow_shipping_db` | Đơn vị vận chuyển (Carriers), biểu phí, vận đơn (Shipments), lịch trình lộ trình |
 | 10 | **Review Service** | `commerceflow_review_db` | Đánh giá sao, nhận xét sản phẩm, ảnh/video feedback, phản hồi của Shop |
-| 11 | **Cart Service** | `Redis Cache (Cluster)` | Lưu trữ giỏ hàng linh hoạt `cart:{customerId}` với TTL 30 ngày (Sub-5ms) |
+| 11 | **Job Service (Quartz)** | `commerceflow_job_db` | Lưu trạng thái Quartz Scheduler (`QRTZ_*`) cho các tác vụ nền & dọn dẹp định kỳ |
+| 12 | **Cart Service** | `Redis Cache (Cluster)` | Lưu trữ giỏ hàng linh hoạt `cart:{customerId}` với TTL 30 ngày (Sub-5ms) |
+
+> **Tổng số bảng hiện tại (V1–V11):** **65 bảng** (gồm **36 bảng nghiệp vụ**, **18 bảng Outbox/Inbox**, và **11 bảng Quartz Scheduler**). Xem mô tả chi tiết từng cột, kiểu dữ liệu thực tế, Enum, FK, Index và phân quyền sở hữu theo service tại [data-dictionary.md](./data-dictionary.md).
 
 ---
 
@@ -692,6 +695,19 @@ CREATE TABLE review_replies (
 
 ---
 
+### 3.11. Job Service & Quartz Scheduler Database (`commerceflow_job_db` — `V11`)
+
+Phục vụ `job-service` (Clustered Quartz JDBC JobStore với `PostgreSQLDelegate`), gồm 11 bảng chuẩn Quartz (`QRTZ_*`) để điều phối các tác vụ định kỳ như hết hạn đơn hàng (`OrderExpirationJob`), giải phóng giữ kho quá hạn, và đối soát escrow:
+
+- `QRTZ_JOB_DETAILS`: Định nghĩa Job (`SCHED_NAME`, `JOB_NAME`, `JOB_GROUP`, `JOB_CLASS_NAME`, `IS_DURABLE`, `IS_NONCONCURRENT`, `REQUESTS_RECOVERY`, `JOB_DATA`).
+- `QRTZ_TRIGGERS`: Lịch kích hoạt chung (`TRIGGER_STATE`, `TRIGGER_TYPE`, `NEXT_FIRE_TIME`, `PREV_FIRE_TIME`, `MISFIRE_INSTR`).
+- `QRTZ_SIMPLE_TRIGGERS`, `QRTZ_CRON_TRIGGERS`, `QRTZ_SIMPROP_TRIGGERS`, `QRTZ_BLOB_TRIGGERS`: Chi tiết tham số trigger theo loại (Simple / Cron / Simprop / Blob).
+- `QRTZ_CALENDARS`, `QRTZ_PAUSED_TRIGGER_GRPS`: Lịch loại trừ và nhóm trigger đang tạm dừng.
+- `QRTZ_FIRED_TRIGGERS`: Trạng thái các trigger đang được thực thi trên từng node.
+- `QRTZ_SCHEDULER_STATE`, `QRTZ_LOCKS`: Heartbeat cluster và pessimistic locks (`TRIGGER_ACCESS`, `STATE_ACCESS`).
+
+---
+
 ## 4. CHUẨN OUTBOX & INBOX TRANSACTIONAL PATTERN (ÁP DỤNG TẤT CẢ SERVICE)
 
 Mỗi service đều sở hữu cặp bảng `outbox` và `inbox` chuyên dụng ngay trong schema của mình để đảm bảo mô hình chuyển giao tin cậy qua Kafka kết hợp Debezium CDC:
@@ -714,6 +730,18 @@ CREATE TABLE <service_name>_inbox (
     processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ```
+
+**Danh sách 18 bảng Outbox / Inbox thực tế trong các migration:**
+- `V1`: `customer_outbox`, `customer_inbox`
+- `V2`: `seller_outbox`, `seller_inbox`
+- `V3`: `product_outbox`, `product_inbox`
+- `V4`: `inventory_outbox`, `inventory_inbox`
+- `V5`: `order_outbox`, `order_inbox`
+- `V6`: `saga_outbox`, `saga_inbox`
+- `V7`: `payment_outbox`, `payment_inbox`
+- `V8`: `promotion_outbox` *(chưa tạo `promotion_inbox`)*
+- `V9`: `shipping_outbox`, `shipping_inbox`
+- `V10`: `review_outbox` *(chưa tạo `review_inbox`)*
 
 ---
 
@@ -769,6 +797,9 @@ Mọi bảng trong hệ thống đều được định nghĩa thành các thự
 | 8 | Promotion | `campaigns`, `vouchers`, `voucher_conditions`, `voucher_redemptions`, `flash_sales`, `flash_sale_items` | `Campaign`, `Voucher`, `VoucherCondition`, `VoucherRedemption`, `FlashSale`, `FlashSaleItem` | Khung giờ Flash Sale, Voucher |
 | 9 | Shipping | `shipping_carriers`, `shipments`, `shipment_tracking_events` | `ShippingCarrier`, `Shipment`, `ShipmentTrackingEvent` | Snapshots địa chỉ, vận đơn |
 | 10 | Review | `product_reviews`, `review_media`, `review_replies` | `ProductReview`, `ReviewMedia`, `ReviewReply` | Đánh giá & phản hồi shop |
+| 11 | Job Scheduler | `QRTZ_*` (11 bảng Quartz) | *(Quản lý bởi Quartz JDBC JobStore)* | Cấu hình tại `job-service` (`V11`) |
+
+> **Lưu ý đồng bộ DDL thực tế vs `BaseEntity`:** Trong các script Flyway `V1`–`V10`, cột `created_at` và `updated_at` của các bảng nghiệp vụ đang dùng kiểu `DATE NOT NULL DEFAULT CURRENT_DATE` (khớp với `LocalDate` trong `BaseEntity` theo múi giờ `Asia/Ho_Chi_Minh`), còn các bảng `*_outbox`, `*_inbox`, `inventory_audit_logs`, `shipment_tracking_events`, `saga_step_executions` dùng `TIMESTAMPTZ NOT NULL DEFAULT NOW()`.
 
 ### 6.2. Danh mục Migration Scripts (Flyway Versioned Scripts)
 
@@ -783,6 +814,7 @@ Toàn bộ các tệp SQL migration được đặt tại thư mục `common-mod
 - `V8__init_promotion_schema.sql`
 - `V9__init_shipping_schema.sql`
 - `V10__init_review_schema.sql`
+- `V11__init_quartz_schema.sql`
 
 ### 6.3. Quy trình thực thi Migration
 1. **Lệnh Maven CLI**:
